@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Market Tracker",
+  "description": "Track Indian market indices from your browser toolbar.",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "Market Tracker",
+    "default_popup": "popup.html"
+  },
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://query1.finance.yahoo.com/*",
+    "https://query2.finance.yahoo.com/*",
+    "https://scanner.tradingview.com/*",
+    "https://symbol-search.tradingview.com/*",
+    "https://www.nseindia.com/api/*"
+  ],
+  "background": {
+    "service_worker": "background.worker.js",
+    "type": "module"
+  },
+  "icons": {
+    "128": "icons/icon128.png"
+  },
+  "minimum_chrome_version": "114"
+}
