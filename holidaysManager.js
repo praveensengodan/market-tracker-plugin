@@ -2,8 +2,8 @@
 // Fetches once per day and shares cache across background worker and UI
 
 const NSE_HOLIDAYS_API = 'https://www.nseindia.com/api/holiday-master?type=trading';
-const CACHE_KEY = 'nseHolidaysCache';
-const CACHE_TIMESTAMP_KEY = 'nseHolidaysCacheTimestamp';
+const CACHE_KEY = 'nseHolidaysCacheV2';
+const CACHE_TIMESTAMP_KEY = 'nseHolidaysCacheTimestampV2';
 const CACHE_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 // In-memory cache (populated from storage on first use)
@@ -21,40 +21,31 @@ async function fetchHolidaysFromAPI() {
         }
         const data = await response.json();
 
-        // API returns an object with segment keys (CBM, FO, etc.)
-        // Each segment contains an array of holiday objects
-        // Example: { "CBM": [{tradingDate: "26-Jan-2026", ...}], "FO": [...] }
+        // Use only the CM segment from NSE holiday response.
+        // Weekend dates inside CM are ignored because weekends are already handled separately.
         const holidays = {};
-        const segments = Object.keys(data);
+        const segmentData = Array.isArray(data?.CM) ? data.CM : [];
+        const monthMap = {
+            'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
+            'May': '05', 'Jun': '06', 'Jul': '07', 'Aug': '08',
+            'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12'
+        };
 
-        segments.forEach(segment => {
-            const segmentData = data[segment];
-
-            if (Array.isArray(segmentData)) {
-                segmentData.forEach((item, index) => {
-                    if (item.tradingDate) {
-                        // Normalize date from "DD-MMM-YYYY" to "YYYY-MM-DD"
-                        let dateKey = item.tradingDate;
-                        const originalDt = item.tradingDate;
-
-                        // Convert "26-Jan-2026" to "2026-01-26"
-                        if (/^\d{1,2}-[A-Za-z]{3}-\d{4}$/.test(dateKey)) {
-                            const [day, month, year] = dateKey.split('-');
-                            const monthMap = {
-                                'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
-                                'May': '05', 'Jun': '06', 'Jul': '07', 'Aug': '08',
-                                'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12'
-                            };
-                            const monthNum = monthMap[month] || '01';
-                            dateKey = `${year}-${monthNum}-${String(day).padStart(2, '0')}`;
-
-                            // Store with description or default name
-                            const description = item.description || `${segment} Holiday`;
-                            holidays[dateKey] = description;
-                        }
-                    }
-                });
+        segmentData.forEach((item) => {
+            if (!item?.tradingDate || !/^\d{1,2}-[A-Za-z]{3}-\d{4}$/.test(item.tradingDate)) {
+                return;
             }
+
+            const [day, month, year] = item.tradingDate.split('-');
+            const monthNum = monthMap[month] || '01';
+            const dateKey = `${year}-${monthNum}-${String(day).padStart(2, '0')}`;
+            const weekday = new Date(`${dateKey}T00:00:00`).getDay();
+
+            if (weekday === 0 || weekday === 6) {
+                return;
+            }
+
+            holidays[dateKey] = item.description || 'CM Holiday';
         });
 
         return Object.keys(holidays).length > 0 ? holidays : null;
@@ -260,3 +251,4 @@ export async function ensureHolidaysCacheLoaded() {
         console.error('Error ensuring holidays cache loaded:', error);
     }
 }
+
