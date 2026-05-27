@@ -273,7 +273,11 @@ function getAlertStatusMeta(currentPrice, threshold) {
   }
 
   if (currentPrice <= threshold) {
-    return { label: 'Already met', className: 'met' };
+    return { label: 'Target reached', className: 'met' };
+  }
+
+  if (currentPrice <= threshold * 1.02) {
+    return { label: 'Near target', className: 'near' };
   }
 
   return { label: 'Waiting', className: 'waiting' };
@@ -306,9 +310,10 @@ function renderPriceAlerts(stocks) {
         </div>
       </div>
       <div class="alert-controls">
-        <span class="alert-label">Below</span>
+        <span class="alert-label">Target</span>
         <input class="alert-threshold-input" type="number" min="0" step="0.01" value="${Number(alert.threshold).toFixed(2)}" />
         <button type="button" class="alert-save-btn">Update</button>
+        <button type="button" class="alert-reset-btn">Reset</button>
         <button type="button" class="alert-remove-btn" aria-label="Remove alert" title="Remove alert">X</button>
       </div>
     `;
@@ -582,7 +587,7 @@ async function loadData() {
 async function syncNotificationToggleButton() {
   const data = await chrome.storage.local.get([NOTIFICATIONS_PAUSED_KEY]);
   const paused = Boolean(data[NOTIFICATIONS_PAUSED_KEY]);
-  elements.notifToggleBtn.textContent = paused ? 'Resume Alerts' : 'Pause Alerts';
+  elements.notifToggleBtn.textContent = paused ? 'Resume Market Alerts' : 'Pause Market Alerts';
   elements.notifToggleBtn.classList.toggle('paused', paused);
 }
 
@@ -712,6 +717,13 @@ async function removePriceAlert(id) {
   const response = await chrome.runtime.sendMessage({ type: 'remove-price-alert', id });
   if (!response?.ok) {
     throw new Error(response?.error || 'Failed to remove alert');
+  }
+}
+
+async function resetPriceAlert(id) {
+  const response = await chrome.runtime.sendMessage({ type: 'reset-price-alert', id });
+  if (!response?.ok) {
+    throw new Error(response?.error || 'Failed to reset alert');
   }
 }
 
@@ -887,6 +899,18 @@ elements.priceAlertsList.addEventListener('click', async (event) => {
       showPriceAlertSavedDialog({ ...alert, threshold });
     } catch (error) {
       elements.statusText.textContent = `Error: ${error?.message || 'Failed to save alert'}`;
+    }
+    return;
+  }
+
+  const resetBtn = event.target.closest('.alert-reset-btn');
+  if (resetBtn) {
+    const row = resetBtn.closest('.alert-row');
+    try {
+      await resetPriceAlert(row.dataset.alertId);
+      elements.statusText.textContent = 'Alert reset. It will notify again on the next matching check.';
+    } catch (error) {
+      elements.statusText.textContent = `Error: ${error?.message || 'Failed to reset alert'}`;
     }
   }
 });

@@ -85,6 +85,9 @@ const TRACKED_STOCKS_KEY = 'trackedStocks';
 const PRICE_ALERTS_KEY = 'priceAlerts';
 const PRICE_ALERT_STATES_KEY = 'priceAlertStates';
 const NOTIFICATION_AUTO_CLOSE_MS = 15000;
+const PRICE_ALERT_NEAR_PERCENT = 2;
+const PRICE_ALERT_REPEAT_MS = 2 * 60 * 1000;
+const PRICE_ALERT_AUTO_CLOSE_MS = 15000;
 
 const WEEKDAY_MAP = {
   Sun: 0,
@@ -234,7 +237,14 @@ async function upsertPriceAlert(alert) {
     nextAlerts.push(entry);
   }
 
-  await chrome.storage.local.set({ [PRICE_ALERTS_KEY]: nextAlerts });
+  const stateStorage = await chrome.storage.local.get([PRICE_ALERT_STATES_KEY]);
+  const states = stateStorage[PRICE_ALERT_STATES_KEY] || {};
+  delete states[entry.id];
+
+  await chrome.storage.local.set({
+    [PRICE_ALERTS_KEY]: nextAlerts,
+    [PRICE_ALERT_STATES_KEY]: states
+  });
   return nextAlerts;
 }
 
@@ -252,6 +262,14 @@ async function removePriceAlert(id) {
 
   return nextAlerts;
 }
+
+async function resetPriceAlert(id) {
+  const stateStorage = await chrome.storage.local.get([PRICE_ALERT_STATES_KEY]);
+  const states = stateStorage[PRICE_ALERT_STATES_KEY] || {};
+  delete states[String(id)];
+  await chrome.storage.local.set({ [PRICE_ALERT_STATES_KEY]: states });
+}
+
 function buildStockConfig(trackedStocks) {
   return Object.fromEntries(
     trackedStocks.map((stock) => [
@@ -716,6 +734,71 @@ async function refreshMarketData(options = {}) {
   });
 
   updateBadge(marketData);
+  // Price alerts are checked on their own alarm to avoid being throttled by off-hours refresh logic.
+}
+
+async function refreshPriceAlertPrices() {
+  const alerts = await getPriceAlerts();
+  if (alerts.length === 0) {
+    return null;
+  }
+
+  const uniqueStocks = new Map();
+  for (const alert of alerts) {
+    uniqueStocks.set(alert.key, { key: alert.key, symbol: alert.symbol, name: alert.name });
+  }
+
+  const entries = Array.from(uniqueStocks.values());
+  const results = await Promise.all(
+    entries.map(async (entry) => {
+      try {
+        const data = await fetchIndexFromYahoo(entry.symbol, entry.name);
+        return { ok: true, key: entry.key, data };
+      } catch (error) {
+        return { ok: false, key: entry.key, error: error?.message || 'Unknown fetch error' };
+      }
+    })
+  );
+
+  const storage = await chrome.storage.local.get([STORAGE_KEY]);
+  const marketData = storage[STORAGE_KEY] || { india: {}, global: {}, stocks: {} };
+  const nextStocks = { ...(marketData.stocks || {}) };
+
+  let updated = false;
+  for (const result of results) {
+    if (result.ok) {
+      nextStocks[result.key] = result.data;
+      updated = true;
+    }
+  }
+
+  if (!updated) {
+    return null;
+  }
+
+  const nextMarketData = { ...marketData, stocks: nextStocks };
+  await chrome.storage.local.set({
+    [STORAGE_KEY]: nextMarketData,
+    [LAST_UPDATED_KEY]: Date.now()
+  });
+
+  return nextMarketData;
+}
+
+async function runPriceAlertScheduler() {
+  const ist = getIstDateParts();
+  const isIndiaHoliday = Boolean(getNseHolidayName(ist.dateKey));
+  const isIndiaWeekend = isWeekend(ist.weekday);
+  const isTradingHours = !isIndiaHoliday && !isIndiaWeekend && isIndiaMarketHours(ist.minutesSinceMidnight);
+  if (!isTradingHours) {
+    return;
+  }
+
+  const marketData = await refreshPriceAlertPrices();
+  if (!marketData) {
+    return;
+  }
+
   await runPriceAlertChecks(marketData);
 }
 
@@ -729,6 +812,7 @@ async function runPriceAlertChecks(marketData) {
   const storage = await chrome.storage.local.get([PRICE_ALERT_STATES_KEY]);
   const states = storage[PRICE_ALERT_STATES_KEY] || {};
   let changed = false;
+  const now = Date.now();
 
   for (const alert of alerts) {
     const stockData = marketData?.stocks?.[alert.key];
@@ -736,21 +820,36 @@ async function runPriceAlertChecks(marketData) {
       continue;
     }
 
-    const isBelow = stockData.price <= alert.threshold;
-    const wasBelow = Boolean(states[alert.id]?.below);
+    const state = states[alert.id] || {};
+    const nearUpperBound = alert.threshold * (1 + PRICE_ALERT_NEAR_PERCENT / 100);
+    const isNear = stockData.price <= nearUpperBound;
+    const isTargetMet = stockData.price <= alert.threshold;
+    const wasNear = Boolean(state.near);
+    const lastTargetNotifiedAt = Number(state.lastTargetNotifiedAt || 0);
+    const shouldRepeatTarget =
+      isTargetMet && (!lastTargetNotifiedAt || now - lastTargetNotifiedAt >= PRICE_ALERT_REPEAT_MS);
 
-    if (isBelow && !wasBelow) {
-      await sendAlert({
+    if (isTargetMet && shouldRepeatTarget) {
+      await sendPriceAlert({
         id: `price-alert-${alert.id}-${Date.now()}`,
         title: 'Market Tracker - Price Alert',
-        message: `${alert.name}: ${formatPrice(stockData.price)} below ${formatPrice(alert.threshold)}`
+        message: `${alert.name}: ${formatPrice(stockData.price)} reached target ${formatPrice(alert.threshold)}`
+      });
+    } else if (isNear && !wasNear) {
+      await sendPriceAlert({
+        id: `price-alert-near-${alert.id}-${Date.now()}`,
+        title: 'Market Tracker - Near Price Alert',
+        message: `${alert.name}: ${formatPrice(stockData.price)} is near target ${formatPrice(alert.threshold)}`
       });
     }
 
-    if (isBelow !== wasBelow) {
+    if (isNear || state.near || state.targetMet) {
       states[alert.id] = {
-        below: isBelow,
-        lastPrice: stockData.price
+        near: isNear,
+        targetMet: isTargetMet,
+        lastPrice: stockData.price,
+        lastNearNotifiedAt: isNear && !wasNear ? now : state.lastNearNotifiedAt || null,
+        lastTargetNotifiedAt: shouldRepeatTarget ? now : state.lastTargetNotifiedAt || null
       };
       changed = true;
     }
@@ -860,6 +959,31 @@ async function sendAlert({ id, title, message }) {
     return { ok: true, id: notificationId };
   } catch (error) {
     return { ok: false, error: error?.message || 'Unknown notification error' };
+  }
+}
+
+async function sendPriceAlert({ id, title, message }) {
+  try {
+    const createdId = await chrome.notifications.create(id, {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+      title,
+      message,
+      // Keep separate from market/index alerts, but avoid drowning out other notifications.
+      priority: 1,
+      requireInteraction: false,
+      silent: false
+    });
+
+    const notificationId = createdId || id;
+
+    setTimeout(() => {
+      chrome.notifications.clear(notificationId, () => { });
+    }, PRICE_ALERT_AUTO_CLOSE_MS);
+
+    return { ok: true, id: notificationId };
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Unknown price notification error' };
   }
 }
 
@@ -1134,6 +1258,10 @@ function ensureAlarms() {
   chrome.alarms.create('indexNotifyScheduler', {
     periodInMinutes: INDEX_NOTIFY_SCHEDULER_MINUTES
   });
+
+  chrome.alarms.create('priceAlertScheduler', {
+    periodInMinutes: 1
+  });
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -1162,6 +1290,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
   if (alarm.name === 'indexNotifyScheduler') {
     runIndexNotificationScheduler();
+  }
+
+  if (alarm.name === 'priceAlertScheduler') {
+    runPriceAlertScheduler();
   }
 });
 
@@ -1213,6 +1345,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     removePriceAlert(message.id)
       .then(() => sendResponse({ ok: true }))
       .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to remove alert' }));
+
+    return true;
+  }
+
+  if (message?.type === 'reset-price-alert') {
+    resetPriceAlert(message.id)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to reset alert' }));
 
     return true;
   }
