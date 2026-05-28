@@ -1,4 +1,4 @@
-import { getNseHolidayName, initializeHolidaysCache } from './holidaysManager.js';
+import { getNseHolidayName, initializeHolidaysCache, ensureHolidaysCacheLoaded } from './holidaysManager.js';
 
 const INDEX_CONFIG = {
   nifty: { symbol: '^NSEI', name: 'Nifty 50', market: 'india' },
@@ -786,6 +786,7 @@ async function refreshPriceAlertPrices() {
 }
 
 async function runPriceAlertScheduler() {
+  await ensureHolidaysCacheLoaded();
   const ist = getIstDateParts();
   const isIndiaHoliday = Boolean(getNseHolidayName(ist.dateKey));
   const isIndiaWeekend = isWeekend(ist.weekday);
@@ -1100,6 +1101,7 @@ function buildAlertForMinute(nowParts) {
 }
 
 async function checkMarketAlerts() {
+  await ensureHolidaysCacheLoaded();
   const nowParts = getIstDateParts();
   const holidayName = getNseHolidayName(nowParts.dateKey);
   if (isWeekend(nowParts.weekday) || holidayName) {
@@ -1123,6 +1125,7 @@ async function checkMarketAlerts() {
 }
 
 async function runIndexNotificationScheduler() {
+  await ensureHolidaysCacheLoaded();
   const now = Date.now();
   let storage = await chrome.storage.local.get([STORAGE_KEY, LAST_INDEX_NOTIFY_KEY]);
   let marketData = storage[STORAGE_KEY];

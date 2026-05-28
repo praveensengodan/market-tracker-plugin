@@ -5,10 +5,35 @@ const NSE_HOLIDAYS_API = 'https://www.nseindia.com/api/holiday-master?type=tradi
 const CACHE_KEY = 'nseHolidaysCacheV2';
 const CACHE_TIMESTAMP_KEY = 'nseHolidaysCacheTimestampV2';
 const CACHE_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
+const FALLBACK_CM_HOLIDAYS = {
+    '2026-01-15': 'Municipal Corporation Election - Maharashtra',
+    '2026-01-26': 'Republic Day',
+    '2026-03-03': 'Holi',
+    '2026-03-26': 'Shri Ram Navami',
+    '2026-03-31': 'Shri Mahavir Jayanti',
+    '2026-04-03': 'Good Friday',
+    '2026-04-14': 'Dr. Baba Saheb Ambedkar Jayanti',
+    '2026-05-01': 'Maharashtra Day',
+    '2026-05-28': 'Bakri Id',
+    '2026-06-26': 'Muharram',
+    '2026-09-14': 'Ganesh Chaturthi',
+    '2026-10-02': 'Mahatma Gandhi Jayanti',
+    '2026-10-20': 'Dussehra',
+    '2026-11-10': 'Diwali-Balipratipada',
+    '2026-11-24': 'Prakash Gurpurb Sri Guru Nanak Dev',
+    '2026-12-25': 'Christmas'
+};
 
 // In-memory cache (populated from storage on first use)
-let holidaysMemoryCache = {}; // Start with empty object, not null
+let holidaysMemoryCache = { ...FALLBACK_CM_HOLIDAYS }; // Start with fallback holidays, not null
 let cacheInitialized = false;
+
+function withFallbackHolidays(holidays = {}) {
+    return {
+        ...FALLBACK_CM_HOLIDAYS,
+        ...holidays
+    };
+}
 
 /**
  * Fetch holidays from NSE API
@@ -48,7 +73,7 @@ async function fetchHolidaysFromAPI() {
             holidays[dateKey] = item.description || 'CM Holiday';
         });
 
-        return Object.keys(holidays).length > 0 ? holidays : null;
+        return Object.keys(holidays).length > 0 ? withFallbackHolidays(holidays) : withFallbackHolidays();
     } catch (error) {
         console.error('Failed to fetch NSE holidays:', error);
         return null;
@@ -94,7 +119,7 @@ async function clearCachedHolidays() {
 async function cacheHolidays(holidays) {
     try {
         await chrome.storage.local.set({
-            [CACHE_KEY]: holidays,
+            [CACHE_KEY]: withFallbackHolidays(holidays),
             [CACHE_TIMESTAMP_KEY]: Date.now()
         });
     } catch (error) {
@@ -112,7 +137,7 @@ async function loadMemoryCache() {
 
     const cached = await getCachedHolidays();
     if (cached) {
-        holidaysMemoryCache = cached;
+        holidaysMemoryCache = withFallbackHolidays(cached);
     }
 
     cacheInitialized = true;
@@ -153,7 +178,7 @@ export async function getNseHolidayNameAsync(dateKey) {
         // If not in cache or cache empty, try to fetch fresh data
         const cached = await getCachedHolidays();
         if (cached) {
-            holidaysMemoryCache = cached;
+            holidaysMemoryCache = withFallbackHolidays(cached);
             return holidaysMemoryCache[dateKey] || null;
         }
 
@@ -161,7 +186,7 @@ export async function getNseHolidayNameAsync(dateKey) {
         const fresh = await fetchHolidaysFromAPI();
         if (fresh) {
             await cacheHolidays(fresh);
-            holidaysMemoryCache = fresh;
+            holidaysMemoryCache = withFallbackHolidays(fresh);
             return fresh[dateKey] || null;
         }
 
@@ -181,7 +206,7 @@ export async function refreshHolidaysFromAPI() {
 
         if (fresh && Object.keys(fresh).length > 0) {
             await cacheHolidays(fresh);
-            holidaysMemoryCache = fresh;
+            holidaysMemoryCache = withFallbackHolidays(fresh);
             cacheInitialized = true;
             return true;
         }
@@ -199,7 +224,7 @@ export async function initializeHolidaysCache() {
     try {
         const cached = await getCachedHolidays();
         if (cached && Object.keys(cached).length > 0) {
-            holidaysMemoryCache = cached;
+            holidaysMemoryCache = withFallbackHolidays(cached);
             cacheInitialized = true;
             return; // Cache still valid
         }
@@ -227,7 +252,7 @@ export async function ensureHolidaysCacheLoaded() {
     try {
         const cached = await getCachedHolidays();
         if (cached && Object.keys(cached).length > 0) {
-            holidaysMemoryCache = cached;
+            holidaysMemoryCache = withFallbackHolidays(cached);
             cacheInitialized = true;
             return;
         }
