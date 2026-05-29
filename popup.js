@@ -59,6 +59,7 @@ const elements = {
   alertSearchResults: document.getElementById('alertSearchResults'),
   alertThresholdInput: document.getElementById('alertThresholdInput'),
   addAlertBtn: document.getElementById('addAlertBtn'),
+  syncApiAlertsBtn: document.getElementById('syncApiAlertsBtn'),
   niftyPrice: document.getElementById('niftyPrice'),
   niftyDelta: document.getElementById('niftyDelta'),
   bankNiftyPrice: document.getElementById('bankNiftyPrice'),
@@ -107,6 +108,26 @@ let latestMarketStocks = {};
 
 function cloneList(items) {
   return items.map((item) => ({ ...item }));
+}
+
+function getAlertSourceRank(source) {
+  return String(source || '').includes('api') ? 2 : 1;
+}
+
+function dedupePriceAlerts(alerts) {
+  const byKey = new Map();
+  for (const alert of alerts || []) {
+    if (!alert?.key) {
+      continue;
+    }
+
+    const existing = byKey.get(alert.key);
+    if (!existing || getAlertSourceRank(alert.source) >= getAlertSourceRank(existing.source)) {
+      byKey.set(alert.key, alert);
+    }
+  }
+
+  return Array.from(byKey.values());
 }
 
 function formatPrice(value) {
@@ -558,7 +579,7 @@ async function loadTrackedStocks() {
 
 async function loadPriceAlerts() {
   const data = await chrome.storage.local.get([PRICE_ALERTS_KEY]);
-  priceAlerts = Array.isArray(data[PRICE_ALERTS_KEY]) ? data[PRICE_ALERTS_KEY] : [];
+  priceAlerts = dedupePriceAlerts(Array.isArray(data[PRICE_ALERTS_KEY]) ? data[PRICE_ALERTS_KEY] : []);
 }
 
 async function loadData() {
@@ -724,6 +745,24 @@ async function resetPriceAlert(id) {
   const response = await chrome.runtime.sendMessage({ type: 'reset-price-alert', id });
   if (!response?.ok) {
     throw new Error(response?.error || 'Failed to reset alert');
+  }
+}
+
+async function syncApiPriceAlerts() {
+  elements.syncApiAlertsBtn.disabled = true;
+  elements.statusText.textContent = 'Syncing API alerts...';
+
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'sync-price-alerts-api' });
+    if (!response?.ok) {
+      throw new Error(response?.error || 'Failed to sync API alerts');
+    }
+
+    elements.statusText.textContent = `Synced ${response.count || 0} API alerts.`;
+    await loadPriceAlerts();
+    renderPriceAlerts(latestMarketStocks);
+  } finally {
+    elements.syncApiAlertsBtn.disabled = false;
   }
 }
 
@@ -912,6 +951,14 @@ elements.priceAlertsList.addEventListener('click', async (event) => {
     } catch (error) {
       elements.statusText.textContent = `Error: ${error?.message || 'Failed to reset alert'}`;
     }
+  }
+});
+
+elements.syncApiAlertsBtn.addEventListener('click', async () => {
+  try {
+    await syncApiPriceAlerts();
+  } catch (error) {
+    elements.statusText.textContent = `Error: ${error?.message || 'Failed to sync API alerts'}`;
   }
 });
 

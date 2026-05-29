@@ -22,6 +22,7 @@ const DEFAULT_PRICE_ALERTS = [
   // Example:
   // { id: 'infy-below-1500', key: 'infy', symbol: 'INFY.NS', name: 'INFY', threshold: 1500 }
 ];
+const PRICE_ALERTS_API_URL = 'https://script.google.com/macros/s/AKfycbxx68RCG2r99m4tpmZyvfddvD5B2_HhWVhxnEoArjmC6tDSQdhZzCcEFtY28M3jxgqA/exec';
 const DEFAULT_TRACKED_STOCKS = [
   { key: 'ashokley', symbol: 'ASHOKLEY.NS', name: 'ASHOKLEY' },
   { key: 'brigade', symbol: 'BRIGADE.NS', name: 'BRIGADE' },
@@ -60,6 +61,7 @@ const IST_OFFSET_MINUTES = 330;
 const US_TIMEZONE = 'America/New_York';
 
 const OPEN_COUNTDOWN_START_MINUTES = 9 * 60 + 10;
+const ALERT_API_PRE_MARKET_SYNC_MINUTES = 9 * 60;
 const OPEN_TIME_MINUTES = 9 * 60 + 15;
 const CLOSE_COUNTDOWN_START_MINUTES = 14 * 60 + 55;
 const CLOSE_TIME_MINUTES = 15 * 60 + 30;
@@ -84,6 +86,7 @@ const NOTIFICATIONS_PAUSED_KEY = 'notificationsPaused';
 const TRACKED_STOCKS_KEY = 'trackedStocks';
 const PRICE_ALERTS_KEY = 'priceAlerts';
 const PRICE_ALERT_STATES_KEY = 'priceAlertStates';
+const PRICE_ALERT_API_SYNC_KEY = 'priceAlertApiSync';
 const NOTIFICATION_AUTO_CLOSE_MS = 15000;
 const PRICE_ALERT_NEAR_PERCENT = 2;
 const PRICE_ALERT_REPEAT_MS = 2 * 60 * 1000;
@@ -178,7 +181,7 @@ function cloneDefaultPriceAlerts() {
 
 function sanitizePriceAlert(alert) {
   const stock = sanitizeTrackedStock(alert);
-  const threshold = Number(alert?.threshold);
+  const threshold = Number(alert?.threshold ?? alert?.Price ?? alert?.price);
   if (!stock || !Number.isFinite(threshold) || threshold <= 0) {
     return null;
   }
@@ -188,8 +191,21 @@ function sanitizePriceAlert(alert) {
     key: stock.key,
     symbol: stock.symbol,
     name: stock.name,
-    threshold
+    threshold,
+    source: String(alert?.source || 'manual')
   };
+}
+
+function getAlertSourceRank(source) {
+  if (source === 'api' || source === 'manual+api') {
+    return 2;
+  }
+
+  return 1;
+}
+
+function alertsChanged(previousAlerts, nextAlerts) {
+  return JSON.stringify(previousAlerts) !== JSON.stringify(nextAlerts);
 }
 
 async function getPriceAlerts() {
@@ -202,19 +218,18 @@ async function getPriceAlerts() {
   }
 
   const storedAlerts = Array.isArray(storage[PRICE_ALERTS_KEY]) ? storage[PRICE_ALERTS_KEY] : [];
-  const seen = new Set();
-  const sanitized = storedAlerts
-    .map(sanitizePriceAlert)
-    .filter((alert) => {
-      if (!alert || seen.has(alert.id)) {
-        return false;
-      }
+  const byKey = new Map();
+  const sanitizedInput = storedAlerts.map(sanitizePriceAlert).filter(Boolean);
+  for (const alert of sanitizedInput) {
+    const existing = byKey.get(alert.key);
+    if (!existing || getAlertSourceRank(alert.source) >= getAlertSourceRank(existing.source)) {
+      byKey.set(alert.key, alert);
+    }
+  }
 
-      seen.add(alert.id);
-      return true;
-    });
+  const sanitized = Array.from(byKey.values());
 
-  if (sanitized.length !== storedAlerts.length) {
+  if (alertsChanged(storedAlerts, sanitized)) {
     await chrome.storage.local.set({ [PRICE_ALERTS_KEY]: sanitized });
   }
 
@@ -229,10 +244,13 @@ async function upsertPriceAlert(alert) {
 
   const alerts = await getPriceAlerts();
   const nextAlerts = [...alerts];
-  const existingIndex = nextAlerts.findIndex((item) => item.id === entry.id);
+  const existingIndex = nextAlerts.findIndex((item) => item.key === entry.key);
 
   if (existingIndex >= 0) {
-    nextAlerts[existingIndex] = entry;
+    nextAlerts[existingIndex] = {
+      ...nextAlerts[existingIndex],
+      ...entry
+    };
   } else {
     nextAlerts.push(entry);
   }
@@ -240,12 +258,154 @@ async function upsertPriceAlert(alert) {
   const stateStorage = await chrome.storage.local.get([PRICE_ALERT_STATES_KEY]);
   const states = stateStorage[PRICE_ALERT_STATES_KEY] || {};
   delete states[entry.id];
+  const existing = existingIndex >= 0 ? alerts[existingIndex] : null;
+  if (existing?.id && existing.id !== entry.id) {
+    delete states[existing.id];
+  }
 
   await chrome.storage.local.set({
     [PRICE_ALERTS_KEY]: nextAlerts,
     [PRICE_ALERT_STATES_KEY]: states
   });
   return nextAlerts;
+}
+
+function sanitizeApiPriceAlert(item) {
+  const symbol = normalizeStockSymbol(item?.Symbol || item?.symbol);
+  const threshold = Number(item?.Price ?? item?.price);
+  if (!symbol || !Number.isFinite(threshold) || threshold <= 0) {
+    return null;
+  }
+
+  const key = normalizeStockKey(symbol);
+  const name = symbol.replace(/\.NS$/i, '');
+  return {
+    id: `price-alert-${key}`,
+    key,
+    symbol,
+    name,
+    threshold,
+    source: 'api'
+  };
+}
+
+async function fetchApiPriceAlerts() {
+  const response = await fetch(PRICE_ALERTS_API_URL, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Price alert API error: ${response.status}`);
+  }
+
+  const payload = await response.json();
+  if (!Array.isArray(payload)) {
+    throw new Error('Price alert API returned invalid data');
+  }
+
+  return payload.map(sanitizeApiPriceAlert).filter(Boolean);
+}
+
+async function syncPriceAlertsFromApi({ force = false } = {}) {
+  await ensureHolidaysCacheLoaded();
+  const ist = getIstDateParts();
+  const isIndiaHoliday = Boolean(getNseHolidayName(ist.dateKey));
+  const isIndiaWeekend = isWeekend(ist.weekday);
+  const isMarketHours = isIndiaMarketHours(ist.minutesSinceMidnight);
+  if (!force && (isIndiaHoliday || isIndiaWeekend || (!isMarketHours && ist.minutesSinceMidnight !== ALERT_API_PRE_MARKET_SYNC_MINUTES))) {
+    return { ok: true, skipped: 'non-trading-time' };
+  }
+
+  const apiAlerts = await fetchApiPriceAlerts();
+  const alerts = await getPriceAlerts();
+  const byKey = new Map(alerts.map((alert) => [alert.key, alert]));
+  const stateStorage = await chrome.storage.local.get([PRICE_ALERT_STATES_KEY]);
+  const states = stateStorage[PRICE_ALERT_STATES_KEY] || {};
+
+  for (const apiAlert of apiAlerts) {
+    const existing = byKey.get(apiAlert.key);
+    if (existing) {
+      const thresholdChanged = Number(existing.threshold) !== Number(apiAlert.threshold);
+      if (thresholdChanged) {
+        delete states[existing.id];
+        delete states[apiAlert.id];
+      }
+
+      byKey.set(apiAlert.key, {
+        ...existing,
+        id: apiAlert.id,
+        symbol: apiAlert.symbol,
+        name: apiAlert.name,
+        threshold: apiAlert.threshold,
+        source: 'api'
+      });
+    } else {
+      byKey.set(apiAlert.key, apiAlert);
+    }
+  }
+
+  const nextAlerts = Array.from(byKey.values()).sort((a, b) => a.name.localeCompare(b.name));
+  const activeIds = new Set(nextAlerts.map((alert) => alert.id));
+  for (const stateId of Object.keys(states)) {
+    if (!activeIds.has(stateId)) {
+      delete states[stateId];
+    }
+  }
+
+  await chrome.storage.local.set({
+    [PRICE_ALERTS_KEY]: nextAlerts,
+    [PRICE_ALERT_STATES_KEY]: states,
+    [PRICE_ALERT_API_SYNC_KEY]: {
+      lastSyncedAt: Date.now(),
+      count: apiAlerts.length
+    }
+  });
+
+  return { ok: true, count: apiAlerts.length };
+}
+
+async function runPriceAlertApiSyncScheduler() {
+  await ensureHolidaysCacheLoaded();
+  const ist = getIstDateParts();
+  const isIndiaHoliday = Boolean(getNseHolidayName(ist.dateKey));
+  const isIndiaWeekend = isWeekend(ist.weekday);
+  if (isIndiaHoliday || isIndiaWeekend) {
+    return;
+  }
+
+  let bucket = null;
+  if (ist.minutesSinceMidnight === ALERT_API_PRE_MARKET_SYNC_MINUTES) {
+    bucket = `${ist.dateKey}-preopen-0900`;
+  } else if (isIndiaMarketHours(ist.minutesSinceMidnight) && ist.minutesSinceMidnight % 60 === 0) {
+    bucket = `${ist.dateKey}-market-${Math.floor(ist.minutesSinceMidnight / 60)}`;
+  }
+
+  if (!bucket) {
+    return;
+  }
+
+  const storage = await chrome.storage.local.get([PRICE_ALERT_API_SYNC_KEY]);
+  const syncState = storage[PRICE_ALERT_API_SYNC_KEY] || {};
+  if (syncState.lastSchedulerBucket === bucket) {
+    return;
+  }
+
+  try {
+    const result = await syncPriceAlertsFromApi({ force: true });
+    await chrome.storage.local.set({
+      [PRICE_ALERT_API_SYNC_KEY]: {
+        ...syncState,
+        lastSchedulerBucket: bucket,
+        lastSyncedAt: Date.now(),
+        count: result.count || 0,
+        lastError: null
+      }
+    });
+  } catch (error) {
+    await chrome.storage.local.set({
+      [PRICE_ALERT_API_SYNC_KEY]: {
+        ...syncState,
+        lastError: error?.message || 'Failed to sync price alerts'
+      }
+    });
+  }
 }
 
 async function removePriceAlert(id) {
@@ -1265,6 +1425,10 @@ function ensureAlarms() {
   chrome.alarms.create('priceAlertScheduler', {
     periodInMinutes: 1
   });
+
+  chrome.alarms.create('priceAlertApiSyncScheduler', {
+    periodInMinutes: 1
+  });
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -1297,6 +1461,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
   if (alarm.name === 'priceAlertScheduler') {
     runPriceAlertScheduler();
+  }
+
+  if (alarm.name === 'priceAlertApiSyncScheduler') {
+    runPriceAlertApiSyncScheduler();
   }
 });
 
@@ -1356,6 +1524,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     resetPriceAlert(message.id)
       .then(() => sendResponse({ ok: true }))
       .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to reset alert' }));
+
+    return true;
+  }
+
+  if (message?.type === 'sync-price-alerts-api') {
+    syncPriceAlertsFromApi({ force: true })
+      .then((result) => sendResponse({ ok: true, count: result.count || 0 }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to sync price alerts' }));
 
     return true;
   }

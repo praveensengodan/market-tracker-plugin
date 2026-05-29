@@ -24,6 +24,10 @@
 - Price-target notifications use a separate sender from market/index/mover alerts.
 - Price-target checks run on their own `priceAlertScheduler` alarm (1-minute cadence) and fetch only alert symbols, so repeats are reliable even when `refreshMarketData` throttles off-hours.
 - Price-target notifications only run during India market hours (IST) on trading days (no weekends / NSE holidays).
+- API price-alert targets are pulled from the Google Script endpoint and merged with local alerts. Existing local alerts remain; matching API symbols update the saved target price.
+- API `Price` is authoritative for matching symbols; duplicate same-stock alerts are collapsed in both storage and popup rendering so the popup shows the API target.
+- API sync uses the final Google Apps Script `/exec` URL and grants both `script.google.com` and `script.googleusercontent.com` host permissions.
+- API alert sync runs at 9:00 AM IST before market open, then hourly during market hours on trading days. The popup also has a manual Sync API button.
 - Background alert schedulers wait for the NSE holiday cache before sending; `holidaysManager.js` also includes 2026 CM holiday fallbacks, including May 28, 2026 (Bakri Id).
 - The popup's pause button applies to market alerts only; price-target alerts are not suppressed by that general pause path.
 
@@ -45,17 +49,23 @@ All India-trading alerts skip Saturdays/Sundays and NSE holidays via `holidaysMa
    - Target reached (<= target): repeats every 2 minutes while price remains at/below target.
    - Resets when price exits the near zone, when threshold is updated, or when Reset is clicked in the popup.
 
-4. Stock Movers (Positive / Negative)
+4. API Price Alert Sync
+   - 9:00 AM: pulls API alert list before market open.
+   - 10:00 AM, 11:00 AM, 12:00 PM, 1:00 PM, 2:00 PM, 3:00 PM: pulls API alert list during market hours.
+   - Skips weekends and NSE holidays.
+   - Manual Sync API button can force a pull from the popup.
+
+5. Stock Movers (Positive / Negative)
    - Only during market hours (9:15 AM to 3:30 PM).
    - Every 10 minutes: sends Top Positive (>1%) and/or Top Negative (>1%) lists if any exist.
 
-5. India Indices Summary ("Market Tracker - India")
+6. India Indices Summary ("Market Tracker - India")
    - During India market hours or Gift Nifty working hours: every 10 minutes.
    - Outside those hours: every 120 minutes.
 
 ## Alert Timings (US / New York Time)
 
-6. US Indices Summary ("Market Tracker - US Indices")
+7. US Indices Summary ("Market Tracker - US Indices")
    - During US market hours (9:30 AM to 4:00 PM ET), weekdays: every 15 minutes.
    - Outside US market hours: every 120 minutes.
 
@@ -65,3 +75,4 @@ All India-trading alerts skip Saturdays/Sundays and NSE holidays via `holidaysMa
 - `popup.js`: near/target status labels, market-alert pause copy, and reset button behavior.
 - `popup.html`: alert input copy changed from below-price to target-price.
 - `popup.css`: reset button and near-target status styling.
+- `manifest.json`: allows the Google Script API host used for alert sync.

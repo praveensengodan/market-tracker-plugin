@@ -17,7 +17,9 @@
     "https://query2.finance.yahoo.com/*",
     "https://scanner.tradingview.com/*",
     "https://symbol-search.tradingview.com/*",
-    "https://www.nseindia.com/api/*"
+    "https://www.nseindia.com/api/*",
+    "https://script.google.com/macros/*",
+    "https://script.googleusercontent.com/macros/*"
   ],
   "background": {
     "service_worker": "background.worker.js",

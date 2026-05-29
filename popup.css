@@ -297,6 +297,7 @@ body code {
 }
 
 .alert-add-btn,
+.alert-sync-btn,
 .alert-save-btn {
   border: 0;
   background: #175cd3;
@@ -309,6 +310,10 @@ body code {
 
 .alert-add-btn {
   padding: 8px 10px;
+}
+
+.alert-sync-btn {
+  padding: 6px 9px;
 }
 
 .alert-save-btn,
