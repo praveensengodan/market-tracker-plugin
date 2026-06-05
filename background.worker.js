@@ -102,6 +102,36 @@ const WEEKDAY_MAP = {
   Sat: 6
 };
 
+const US_HOLIDAYS = {
+  // 2025 US Stock Market Holidays
+  '2025-01-01': "New Year's Day",
+  '2025-01-20': 'Martin Luther King Jr. Day',
+  '2025-02-17': "Presidents' Day / Washington's Birthday",
+  '2025-04-18': 'Good Friday',
+  '2025-05-26': 'Memorial Day',
+  '2025-06-19': 'Juneteenth',
+  '2025-07-04': 'Independence Day',
+  '2025-09-01': 'Labor Day',
+  '2025-11-27': 'Thanksgiving Day',
+  '2025-12-25': 'Christmas Day',
+
+  // 2026 US Stock Market Holidays
+  '2026-01-01': "New Year's Day",
+  '2026-01-19': 'Martin Luther King Jr. Day',
+  '2026-02-16': "Presidents' Day / Washington's Birthday",
+  '2026-04-03': 'Good Friday',
+  '2026-05-25': 'Memorial Day',
+  '2026-06-19': 'Juneteenth',
+  '2026-07-03': 'Independence Day (Observed)',
+  '2026-09-07': 'Labor Day',
+  '2026-11-26': 'Thanksgiving Day',
+  '2026-12-25': 'Christmas Day'
+};
+
+function isUsHoliday(dateKey) {
+  return Boolean(US_HOLIDAYS[dateKey]);
+}
+
 function cloneDefaultTrackedStocks() {
   return DEFAULT_TRACKED_STOCKS.map((stock) => ({ ...stock }));
 }
@@ -186,13 +216,17 @@ function sanitizePriceAlert(alert) {
     return null;
   }
 
+  const rawType = String(alert?.type || alert?.Type || alert?.action || alert?.Action || alert?.direction || alert?.Direction || 'buy').trim().toLowerCase();
+  const normalizedType = (rawType === 'sell' || rawType === 'above' || rawType === 'up') ? 'sell' : 'buy';
+
   return {
     id: String(alert?.id || ('price-alert-' + stock.key + '-' + String(threshold).replace('.', '_'))),
     key: stock.key,
     symbol: stock.symbol,
     name: stock.name,
     threshold,
-    source: String(alert?.source || 'manual')
+    source: String(alert?.source || 'manual'),
+    type: normalizedType
   };
 }
 
@@ -279,13 +313,17 @@ function sanitizeApiPriceAlert(item) {
 
   const key = normalizeStockKey(symbol);
   const name = symbol.replace(/\.NS$/i, '');
+  const rawType = String(item?.type || item?.Type || item?.action || item?.Action || item?.direction || item?.Direction || 'buy').trim().toLowerCase();
+  const normalizedType = (rawType === 'sell' || rawType === 'above' || rawType === 'up') ? 'sell' : 'buy';
+
   return {
     id: `price-alert-${key}`,
     key,
     symbol,
     name,
     threshold,
-    source: 'api'
+    source: 'api',
+    type: normalizedType
   };
 }
 
@@ -322,7 +360,7 @@ async function syncPriceAlertsFromApi({ force = false } = {}) {
   for (const apiAlert of apiAlerts) {
     const existing = byKey.get(apiAlert.key);
     if (existing) {
-      const thresholdChanged = Number(existing.threshold) !== Number(apiAlert.threshold);
+      const thresholdChanged = Number(existing.threshold) !== Number(apiAlert.threshold) || existing.type !== apiAlert.type;
       if (thresholdChanged) {
         delete states[existing.id];
         delete states[apiAlert.id];
@@ -334,7 +372,8 @@ async function syncPriceAlertsFromApi({ force = false } = {}) {
         symbol: apiAlert.symbol,
         name: apiAlert.name,
         threshold: apiAlert.threshold,
-        source: 'api'
+        source: 'api',
+        type: apiAlert.type
       });
     } else {
       byKey.set(apiAlert.key, apiAlert);
@@ -982,9 +1021,21 @@ async function runPriceAlertChecks(marketData) {
     }
 
     const state = states[alert.id] || {};
-    const nearUpperBound = alert.threshold * (1 + PRICE_ALERT_NEAR_PERCENT / 100);
-    const isNear = stockData.price <= nearUpperBound;
-    const isTargetMet = stockData.price <= alert.threshold;
+    const isBuy = alert.type === 'buy';
+
+    let isNear = false;
+    let isTargetMet = false;
+
+    if (isBuy) {
+      const nearUpperBound = alert.threshold * (1 + PRICE_ALERT_NEAR_PERCENT / 100);
+      isNear = stockData.price <= nearUpperBound;
+      isTargetMet = stockData.price <= alert.threshold;
+    } else {
+      const nearLowerBound = alert.threshold * (1 - PRICE_ALERT_NEAR_PERCENT / 100);
+      isNear = stockData.price >= nearLowerBound;
+      isTargetMet = stockData.price >= alert.threshold;
+    }
+
     const wasNear = Boolean(state.near);
     const lastTargetNotifiedAt = Number(state.lastTargetNotifiedAt || 0);
     const shouldRepeatTarget =
@@ -994,13 +1045,13 @@ async function runPriceAlertChecks(marketData) {
       await sendPriceAlert({
         id: `price-alert-${alert.id}-${Date.now()}`,
         title: 'Market Tracker - Price Alert',
-        message: `${alert.name}: ${formatPrice(stockData.price)} reached target ${formatPrice(alert.threshold)}`
+        message: `${alert.name}: ${formatPrice(stockData.price)} reached target ${formatPrice(alert.threshold)} (${alert.type.toUpperCase()})`
       });
     } else if (isNear && !wasNear) {
       await sendPriceAlert({
         id: `price-alert-near-${alert.id}-${Date.now()}`,
         title: 'Market Tracker - Near Price Alert',
-        message: `${alert.name}: ${formatPrice(stockData.price)} is near target ${formatPrice(alert.threshold)}`
+        message: `${alert.name}: ${formatPrice(stockData.price)} is near target ${formatPrice(alert.threshold)} (${alert.type.toUpperCase()})`
       });
     }
 
@@ -1053,6 +1104,9 @@ function getZonedDateParts(timeZone) {
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone,
     weekday: 'short',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
     hourCycle: 'h23'
@@ -1069,10 +1123,12 @@ function getZonedDateParts(timeZone) {
   const weekday = WEEKDAY_MAP[map.weekday] ?? 0;
   const hour = Number(map.hour || 0);
   const minute = Number(map.minute || 0);
+  const dateKey = `${map.year}-${map.month}-${map.day}`;
 
   return {
     weekday,
-    minutesSinceMidnight: hour * 60 + minute
+    minutesSinceMidnight: hour * 60 + minute,
+    dateKey
   };
 }
 
@@ -1333,7 +1389,7 @@ async function runIndexNotificationScheduler() {
     ? INDIA_MARKET_INTERVAL_MINUTES
     : INDIA_OFF_INTERVAL_MINUTES;
 
-  if (nifty || giftNifty) {
+  if (!isIndiaHoliday && !isIndiaWeekend && (nifty || giftNifty)) {
     const giftLine = niftyMarketHours
       ? formatIndexLine('Sensex', marketData?.india?.sensex)
       : formatIndexLine('Gift Nifty', giftNifty);
@@ -1362,7 +1418,9 @@ async function runIndexNotificationScheduler() {
   const sp500 = marketData?.global?.sp500;
   const nasdaq100 = marketData?.global?.nasdaq;
 
-  if (dow || sp500 || nasdaq100) {
+  const isUsHolidayOrWeekend = isWeekend(us.weekday) || isUsHoliday(us.dateKey);
+
+  if (!isUsHolidayOrWeekend && (dow || sp500 || nasdaq100)) {
     const usMessage = [
       formatIndexLine('Dow Jones', dow),
       formatIndexLine('S&P 500', sp500),

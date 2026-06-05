@@ -9,9 +9,10 @@
 
 ## Current Alert Requirement
 
-- A saved alert target such as `100` should start warning when the live price nears the target.
-- Near-target means within 2% above the target, so a `100` alert starts warning around `102`.
-- Once price reaches or goes below the target, notification should repeat every 2 minutes.
+- A saved alert target supports both Buy and Sell directions.
+- **Buy Targets:** Triggers when price reaches or falls below target. Near-target is within 2% above the target.
+- **Sell Targets:** Triggers when price reaches or rises above target. Near-target is within 2% below the target.
+- Once the target price condition is met, notifications repeat every 2 minutes.
 - Alert state resets when price moves back outside the near-target band or when the user clicks Reset in the popup.
 
 ## Implementation Notes
@@ -45,8 +46,9 @@ All India-trading alerts skip Saturdays/Sundays and NSE holidays via `holidaysMa
 
 3. Price Alerts (per configured stock target)
    - Checked every 1 minute during market hours (9:15 AM to 3:30 PM).
-   - Near-target (<= 2% above target): one notification when entering the near zone.
-   - Target reached (<= target): repeats every 2 minutes while price remains at/below target.
+   - Supports both BUY (downward) and SELL (upward) target price directions.
+   - Near-target (within 2% above buy target or 2% below sell target): one notification when entering the zone.
+   - Target reached (at/below buy target or at/above sell target): repeats every 2 minutes while target condition is met.
    - Resets when price exits the near zone, when threshold is updated, or when Reset is clicked in the popup.
 
 4. API Price Alert Sync
@@ -60,19 +62,21 @@ All India-trading alerts skip Saturdays/Sundays and NSE holidays via `holidaysMa
    - Every 10 minutes: sends Top Positive (>1%) and/or Top Negative (>1%) lists if any exist.
 
 6. India Indices Summary ("Market Tracker - India")
+   - Only sent on India trading days (skips Saturdays, Sundays, and NSE holidays).
    - During India market hours or Gift Nifty working hours: every 10 minutes.
    - Outside those hours: every 120 minutes.
 
 ## Alert Timings (US / New York Time)
 
 7. US Indices Summary ("Market Tracker - US Indices")
-   - During US market hours (9:30 AM to 4:00 PM ET), weekdays: every 15 minutes.
+   - Only sent on US trading days (skips Saturdays, Sundays, and US stock market holidays).
+   - During US market hours (9:30 AM to 4:00 PM ET): every 15 minutes.
    - Outside US market hours: every 120 minutes.
 
 ## Files Changed
 
-- `background.worker.js`: recursive target alert logic, near-target notifications, separate high-priority price alert sender, reset handler, state reset on alert update.
-- `popup.js`: near/target status labels, market-alert pause copy, and reset button behavior.
-- `popup.html`: alert input copy changed from below-price to target-price.
-- `popup.css`: reset button and near-target status styling.
+- `background.worker.js`: recursive target alert logic, near-target notifications, separate high-priority price alert sender, reset handler, state reset on alert update, index notification suppression on holidays/weekends, and buy/sell target support.
+- `popup.js`: near/target status labels, market-alert pause copy, reset button behavior, buy/sell target inputs/dropdown extraction, and status type chip rendering.
+- `popup.html`: alert input type selection dropdown added, alert-form-grid adjustments.
+- `popup.css`: reset button and near-target status styling, alert type select and buy/sell type status chips styling.
 - `manifest.json`: allows the Google Script API host used for alert sync.

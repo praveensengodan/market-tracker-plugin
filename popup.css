@@ -263,10 +263,33 @@ body code {
 
 .alert-form-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 88px 78px;
-  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) 52px 82px 72px;
+  gap: 4px;
   margin-bottom: 8px;
 }
+
+.alert-type-select {
+  border: 1px solid rgba(199, 215, 254, 0.24);
+  background: rgba(7, 18, 39, 0.92);
+  color: #f8fafc;
+  border-radius: 9px;
+  padding: 0 4px;
+  font-size: 11px;
+  outline: none;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.alert-type-select option {
+  background: #071227;
+  color: #f8fafc;
+}
+
+.alert-type-select:focus {
+  border-color: #7ea6ff;
+  box-shadow: 0 0 0 2px rgba(126, 166, 255, 0.18);
+}
+
 
 .stock-search-shell {
   position: relative;
@@ -444,7 +467,31 @@ body code {
   color: #98a2b3;
   white-space: nowrap;
 }
+.alert-type-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 4px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  margin-right: 4px;
+}
 
+.alert-type-chip.buy {
+  background: rgba(18, 183, 106, 0.15);
+  color: #6ce9a6;
+  border: 1px solid rgba(18, 183, 106, 0.25);
+}
+
+.alert-type-chip.sell {
+  background: rgba(240, 68, 56, 0.15);
+  color: #fca5a5;
+  border: 1px solid rgba(240, 68, 56, 0.25);
+}
 
 .alert-status-chip {
   display: inline-flex;

@@ -57,6 +57,7 @@ const elements = {
   stockSearchResults: document.getElementById('stockSearchResults'),
   alertStockSearchInput: document.getElementById('alertStockSearchInput'),
   alertSearchResults: document.getElementById('alertSearchResults'),
+  alertTypeSelect: document.getElementById('alertTypeSelect'),
   alertThresholdInput: document.getElementById('alertThresholdInput'),
   addAlertBtn: document.getElementById('addAlertBtn'),
   syncApiAlertsBtn: document.getElementById('syncApiAlertsBtn'),
@@ -288,17 +289,26 @@ function renderStocks(stocks) {
 }
 
 
-function getAlertStatusMeta(currentPrice, threshold) {
+function getAlertStatusMeta(currentPrice, threshold, type = 'buy') {
   if (typeof currentPrice !== 'number') {
     return { label: 'No live price', className: 'unknown' };
   }
 
-  if (currentPrice <= threshold) {
-    return { label: 'Target reached', className: 'met' };
-  }
-
-  if (currentPrice <= threshold * 1.02) {
-    return { label: 'Near target', className: 'near' };
+  const isBuy = type === 'buy';
+  if (isBuy) {
+    if (currentPrice <= threshold) {
+      return { label: 'Target reached', className: 'met' };
+    }
+    if (currentPrice <= threshold * 1.02) {
+      return { label: 'Near target', className: 'near' };
+    }
+  } else {
+    if (currentPrice >= threshold) {
+      return { label: 'Target reached', className: 'met' };
+    }
+    if (currentPrice >= threshold * 0.98) {
+      return { label: 'Near target', className: 'near' };
+    }
   }
 
   return { label: 'Waiting', className: 'waiting' };
@@ -317,7 +327,8 @@ function renderPriceAlerts(stocks) {
 
   for (const alert of ordered) {
     const current = stocks[alert.key]?.price;
-    const status = getAlertStatusMeta(current, alert.threshold);
+    const type = alert.type || 'buy';
+    const status = getAlertStatusMeta(current, alert.threshold, type);
     const row = document.createElement('article');
     row.className = 'alert-row';
     row.dataset.alertId = alert.id;
@@ -327,6 +338,7 @@ function renderPriceAlerts(stocks) {
           <span class="alert-name">${alert.name}</span>
           <span class="alert-symbol">${alert.symbol}</span>
           <span class="alert-current">Current: ${typeof current === 'number' ? formatPrice(current) : '--'}</span>
+          <span class="alert-type-chip ${type}">${type.toUpperCase()}</span>
           <span class="alert-status-chip ${status.className}">${status.label}</span>
         </div>
       </div>
@@ -579,7 +591,9 @@ async function loadTrackedStocks() {
 
 async function loadPriceAlerts() {
   const data = await chrome.storage.local.get([PRICE_ALERTS_KEY]);
+  console.log('loadPriceAlerts raw data from storage:', data[PRICE_ALERTS_KEY]);
   priceAlerts = dedupePriceAlerts(Array.isArray(data[PRICE_ALERTS_KEY]) ? data[PRICE_ALERTS_KEY] : []);
+  console.log('loadPriceAlerts deduped alerts in popup:', priceAlerts);
 }
 
 async function loadData() {
@@ -711,9 +725,14 @@ async function removeTrackedStock(key) {
 function showPriceAlertSavedDialog(alert) {
   const currentPrice = latestMarketStocks[alert.key]?.price;
   const lines = [`${alert.name} alert saved.`];
+  const isBuy = alert.type === 'buy';
 
-  if (typeof currentPrice === 'number' && currentPrice <= alert.threshold) {
-    lines.push(`Current price ${formatPrice(currentPrice)} is already below ${formatPrice(alert.threshold)}.`);
+  if (typeof currentPrice === 'number') {
+    if (isBuy && currentPrice <= alert.threshold) {
+      lines.push(`Current price ${formatPrice(currentPrice)} is already below ${formatPrice(alert.threshold)}.`);
+    } else if (!isBuy && currentPrice >= alert.threshold) {
+      lines.push(`Current price ${formatPrice(currentPrice)} is already above ${formatPrice(alert.threshold)}.`);
+    }
   }
 
   window.alert(lines.join('\n'));
@@ -749,8 +768,10 @@ async function resetPriceAlert(id) {
 }
 
 async function syncApiPriceAlerts() {
-  elements.syncApiAlertsBtn.disabled = true;
-  elements.statusText.textContent = 'Syncing API alerts...';
+  const btn = elements.syncApiAlertsBtn;
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Syncing...';
 
   try {
     const response = await chrome.runtime.sendMessage({ type: 'sync-price-alerts-api' });
@@ -762,7 +783,8 @@ async function syncApiPriceAlerts() {
     await loadPriceAlerts();
     renderPriceAlerts(latestMarketStocks);
   } finally {
-    elements.syncApiAlertsBtn.disabled = false;
+    btn.disabled = false;
+    btn.textContent = originalText;
   }
 }
 
@@ -877,6 +899,7 @@ function resolveAlertSelection() {
 elements.addAlertBtn.addEventListener('click', async () => {
   const threshold = Number(elements.alertThresholdInput.value);
   const alertStock = resolveAlertSelection();
+  const type = elements.alertTypeSelect.value || 'buy';
   if (!alertStock) {
     elements.statusText.textContent = 'Search a stock and pick a match for the alert.';
     return;
@@ -892,7 +915,8 @@ elements.addAlertBtn.addEventListener('click', async () => {
       key: alertStock.key,
       symbol: alertStock.symbol,
       name: alertStock.name,
-      threshold
+      threshold,
+      type
     });
     elements.alertStockSearchInput.value = '';
     elements.alertThresholdInput.value = '';
@@ -901,7 +925,8 @@ elements.addAlertBtn.addEventListener('click', async () => {
     showPriceAlertSavedDialog({
       key: alertStock.key,
       name: alertStock.name,
-      threshold
+      threshold,
+      type
     });
   } catch (error) {
     elements.statusText.textContent = `Error: ${error?.message || 'Failed to save alert'}`;
