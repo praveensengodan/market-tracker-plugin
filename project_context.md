@@ -64,7 +64,8 @@ All India-trading alerts skip Saturdays/Sundays and NSE holidays via `holidaysMa
 6. India Indices Summary ("Market Tracker - India")
    - Only sent on India trading days (skips Saturdays, Sundays, and NSE holidays).
    - During India market hours or Gift Nifty working hours: every 10 minutes.
-   - Outside those hours: every 120 minutes.
+     *(Note: The early morning session from 12:00 AM to 2:45 AM IST is only active if the previous calendar day was a trading day)*
+   - Outside those hours: Silent (no notifications are sent during off-hours).
 
 ## Alert Timings (US / New York Time)
 
@@ -75,7 +76,7 @@ All India-trading alerts skip Saturdays/Sundays and NSE holidays via `holidaysMa
 
 ## Files Changed
 
-- `background.worker.js`: recursive target alert logic, near-target notifications, separate high-priority price alert sender, reset handler, state reset on alert update, index notification suppression on holidays/weekends, and buy/sell target support.
+- `background.worker.js`: recursive target alert logic, near-target notifications, separate high-priority price alert sender, reset handler, state reset on alert update, index notification suppression on holidays/weekends, buy/sell target support, and Gift Nifty early morning session previous-day validation.
 - `popup.js`: near/target status labels, market-alert pause copy, reset button behavior, buy/sell target inputs/dropdown extraction, and status type chip rendering.
 - `popup.html`: alert input type selection dropdown added, alert-form-grid adjustments.
 - `popup.css`: reset button and near-target status styling, alert type select and buy/sell type status chips styling.

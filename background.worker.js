@@ -87,10 +87,8 @@ const TRACKED_STOCKS_KEY = 'trackedStocks';
 const PRICE_ALERTS_KEY = 'priceAlerts';
 const PRICE_ALERT_STATES_KEY = 'priceAlertStates';
 const PRICE_ALERT_API_SYNC_KEY = 'priceAlertApiSync';
-const NOTIFICATION_AUTO_CLOSE_MS = 15000;
 const PRICE_ALERT_NEAR_PERCENT = 2;
 const PRICE_ALERT_REPEAT_MS = 2 * 60 * 1000;
-const PRICE_ALERT_AUTO_CLOSE_MS = 15000;
 
 const WEEKDAY_MAP = {
   Sun: 0,
@@ -835,7 +833,7 @@ async function shouldThrottleRefresh(force = false) {
   const indiaActive = !isIndiaHoliday && !isIndiaWeekend && isIndiaMarketHours(ist.minutesSinceMidnight);
   const stocksActive = indiaActive;
   const globalActive = !isWeekend(us.weekday) && isUsMarketHours(us.minutesSinceMidnight);
-  const giftActive = !isIndiaWeekend && isGiftNiftyWorkingHours(ist.minutesSinceMidnight);
+  const giftActive = isGiftNiftyWorkingHours(ist);
 
   const anyActiveMarket = indiaActive || stocksActive || globalActive || giftActive;
   if (anyActiveMarket) {
@@ -1140,10 +1138,35 @@ function isIndiaMarketHours(minutesSinceMidnight) {
   return minutesSinceMidnight >= OPEN_TIME_MINUTES && minutesSinceMidnight < NIFTY_NOTIFY_CLOSE_MINUTES;
 }
 
-function isGiftNiftyWorkingHours(minutesSinceMidnight) {
+function isGiftNiftyWorkingHours(ist) {
+  const minutesSinceMidnight = ist.minutesSinceMidnight;
   const session1 = minutesSinceMidnight >= (6 * 60 + 30) && minutesSinceMidnight < (15 * 60 + 40);
-  const session2 = minutesSinceMidnight >= (16 * 60 + 35) || minutesSinceMidnight < (2 * 60 + 45);
-  return session1 || session2;
+  const session2Part1 = minutesSinceMidnight >= (16 * 60 + 35);
+  const session2Part2 = minutesSinceMidnight < (2 * 60 + 45);
+
+  if (session1 || session2Part1) {
+    const isIndiaHoliday = Boolean(getNseHolidayName(ist.dateKey));
+    return !isWeekend(ist.weekday) && !isIndiaHoliday;
+  }
+
+  if (session2Part2) {
+    const [year, month, day] = ist.dateKey.split('-').map(Number);
+    const currentDate = new Date(Date.UTC(year, month - 1, day));
+    const previousDate = new Date(currentDate.getTime() - 24 * 60 * 60 * 1000);
+
+    const prevYear = previousDate.getUTCFullYear();
+    const prevMonth = String(previousDate.getUTCMonth() + 1).padStart(2, '0');
+    const prevDay = String(previousDate.getUTCDate()).padStart(2, '0');
+    const prevDateKey = `${prevYear}-${prevMonth}-${prevDay}`;
+    const prevWeekday = previousDate.getUTCDay();
+
+    const isPrevWeekend = isWeekend(prevWeekday);
+    const isPrevHoliday = Boolean(getNseHolidayName(prevDateKey));
+
+    return !isPrevWeekend && !isPrevHoliday;
+  }
+
+  return false;
 }
 
 function isUsMarketHours(minutesSinceMidnight) {
@@ -1169,10 +1192,6 @@ async function sendAlert({ id, title, message }) {
 
     const notificationId = createdId || id;
 
-    setTimeout(() => {
-      chrome.notifications.clear(notificationId, () => { });
-    }, NOTIFICATION_AUTO_CLOSE_MS);
-
     return { ok: true, id: notificationId };
   } catch (error) {
     return { ok: false, error: error?.message || 'Unknown notification error' };
@@ -1193,10 +1212,6 @@ async function sendPriceAlert({ id, title, message }) {
     });
 
     const notificationId = createdId || id;
-
-    setTimeout(() => {
-      chrome.notifications.clear(notificationId, () => { });
-    }, PRICE_ALERT_AUTO_CLOSE_MS);
 
     return { ok: true, id: notificationId };
   } catch (error) {
@@ -1383,13 +1398,11 @@ async function runIndexNotificationScheduler() {
   const giftNifty = marketData?.india?.giftNifty;
 
   const niftyMarketHours = !isIndiaHoliday && !isIndiaWeekend && isIndiaMarketHours(ist.minutesSinceMidnight);
-  const giftWorkingHours = !isIndiaWeekend && isGiftNiftyWorkingHours(ist.minutesSinceMidnight);
+  const giftWorkingHours = isGiftNiftyWorkingHours(ist);
 
-  const indiaInterval = (niftyMarketHours || giftWorkingHours)
-    ? INDIA_MARKET_INTERVAL_MINUTES
-    : INDIA_OFF_INTERVAL_MINUTES;
+  const isIndiaActive = niftyMarketHours || giftWorkingHours;
 
-  if (!isIndiaHoliday && !isIndiaWeekend && (nifty || giftNifty)) {
+  if (isIndiaActive && !isIndiaHoliday && !isIndiaWeekend && (nifty || giftNifty)) {
     const giftLine = niftyMarketHours
       ? formatIndexLine('Sensex', marketData?.india?.sensex)
       : formatIndexLine('Gift Nifty', giftNifty);
@@ -1401,7 +1414,7 @@ async function runIndexNotificationScheduler() {
 
     await maybeSendByInterval(
       'india-combined',
-      indiaInterval,
+      INDIA_MARKET_INTERVAL_MINUTES,
       'Market Tracker - India',
       indiaMessage,
       0
