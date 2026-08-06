@@ -63,9 +63,11 @@ const US_TIMEZONE = 'America/New_York';
 const OPEN_COUNTDOWN_START_MINUTES = 9 * 60 + 10;
 const ALERT_API_PRE_MARKET_SYNC_MINUTES = 9 * 60;
 const OPEN_TIME_MINUTES = 9 * 60 + 15;
-const CLOSE_COUNTDOWN_START_MINUTES = 14 * 60 + 55;
-const CLOSE_TIME_MINUTES = 15 * 60 + 30;
-const NIFTY_NOTIFY_CLOSE_MINUTES = 15 * 60 + 30;
+const CLOSE_COUNTDOWN_START_MINUTES = 15 * 60;
+const CLOSE_TIME_MINUTES = 15 * 60 + 15;
+const POST_OPEN_TIME_MINUTES = 15 * 60 + 20;
+const POST_CLOSE_TIME_MINUTES = 15 * 60 + 25;
+const NIFTY_NOTIFY_CLOSE_MINUTES = 15 * 60 + 25;
 
 const US_OPEN_MINUTES = 9 * 60 + 30;
 const US_CLOSE_MINUTES = 16 * 60;
@@ -1173,9 +1175,20 @@ function isUsMarketHours(minutesSinceMidnight) {
   return minutesSinceMidnight >= US_OPEN_MINUTES && minutesSinceMidnight < US_CLOSE_MINUTES;
 }
 
+function isNotificationsPaused(settings) {
+  const pauseVal = settings[NOTIFICATIONS_PAUSED_KEY];
+  if (pauseVal === true || pauseVal === 'indefinite' || (pauseVal && pauseVal.type === 'indefinite')) {
+    return true;
+  }
+  if (pauseVal && typeof pauseVal === 'object' && pauseVal.until) {
+    return Date.now() < pauseVal.until;
+  }
+  return false;
+}
+
 async function sendAlert({ id, title, message }) {
   const settings = await chrome.storage.local.get([NOTIFICATIONS_PAUSED_KEY]);
-  if (settings[NOTIFICATIONS_PAUSED_KEY]) {
+  if (isNotificationsPaused(settings)) {
     return { ok: true, skipped: 'paused' };
   }
 
@@ -1199,6 +1212,11 @@ async function sendAlert({ id, title, message }) {
 }
 
 async function sendPriceAlert({ id, title, message }) {
+  const settings = await chrome.storage.local.get([NOTIFICATIONS_PAUSED_KEY]);
+  if (isNotificationsPaused(settings)) {
+    return { ok: true, skipped: 'paused' };
+  }
+
   try {
     const createdId = await chrome.notifications.create(id, {
       type: 'basic',
@@ -1299,12 +1317,25 @@ function getOpenAlertMessage(minutesNow) {
 
 function getCloseAlertMessage(minutesNow) {
   if (minutesNow === CLOSE_TIME_MINUTES) {
-    return 'Market closes now (3:30 PM IST).';
+    return 'Market closes now (3:15 PM IST).';
   }
 
   const remaining = CLOSE_TIME_MINUTES - minutesNow;
   const suffix = remaining === 1 ? '' : 's';
-  return `Market closes in ${remaining} minute${suffix} (3:30 PM IST).`;
+  return `Market closes in ${remaining} minute${suffix} (3:15 PM IST).`;
+}
+
+function getPostMarketAlertMessage(minutesNow) {
+  if (minutesNow === POST_CLOSE_TIME_MINUTES) {
+    return 'Post-market session closes now (3:25 PM IST).';
+  }
+  if (minutesNow === POST_OPEN_TIME_MINUTES) {
+    return 'Post-market session opens. Closes in 5 minutes (3:25 PM IST).';
+  }
+
+  const remaining = POST_CLOSE_TIME_MINUTES - minutesNow;
+  const suffix = remaining === 1 ? '' : 's';
+  return `Post-market session closes in ${remaining} minute${suffix} (3:25 PM IST).`;
 }
 
 function buildAlertForMinute(nowParts) {
@@ -1320,11 +1351,24 @@ function buildAlertForMinute(nowParts) {
   }
 
   if (minutesNow >= CLOSE_COUNTDOWN_START_MINUTES && minutesNow <= CLOSE_TIME_MINUTES) {
+    let msg = getCloseAlertMessage(minutesNow);
+    if (minutesNow === CLOSE_TIME_MINUTES) {
+      msg = 'Market closes now. Closing session starts (3:15 PM - 3:20 PM IST).';
+    }
     return {
       key: `close-${nowParts.dateKey}-${minutesNow}`,
       id: `close-alert-${nowParts.dateKey}-${minutesNow}`,
       title: 'Market Tracker',
-      message: getCloseAlertMessage(minutesNow)
+      message: msg
+    };
+  }
+
+  if (minutesNow >= POST_OPEN_TIME_MINUTES && minutesNow <= POST_CLOSE_TIME_MINUTES) {
+    return {
+      key: `post-${nowParts.dateKey}-${minutesNow}`,
+      id: `post-alert-${nowParts.dateKey}-${minutesNow}`,
+      title: 'Market Tracker',
+      message: getPostMarketAlertMessage(minutesNow)
     };
   }
 

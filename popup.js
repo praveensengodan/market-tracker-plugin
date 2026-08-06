@@ -51,7 +51,7 @@ const elements = {
   nextEventTimer: document.getElementById('nextEventTimer'),
   stocksList: document.getElementById('stocksList'),
   priceAlertsList: document.getElementById('priceAlertsList'),
-  notifToggleBtn: document.getElementById('notifToggleBtn'),
+  notifToggleSelect: document.getElementById('notifToggleSelect'),
   stockSort: document.getElementById('stockSort'),
   stockSearchInput: document.getElementById('stockSearchInput'),
   stockSearchResults: document.getElementById('stockSearchResults'),
@@ -621,9 +621,25 @@ async function loadData() {
 
 async function syncNotificationToggleButton() {
   const data = await chrome.storage.local.get([NOTIFICATIONS_PAUSED_KEY]);
-  const paused = Boolean(data[NOTIFICATIONS_PAUSED_KEY]);
-  elements.notifToggleBtn.textContent = paused ? 'Resume Market Alerts' : 'Pause Market Alerts';
-  elements.notifToggleBtn.classList.toggle('paused', paused);
+  const pauseVal = data[NOTIFICATIONS_PAUSED_KEY];
+  
+  let isPausedActive = false;
+  let selectValue = 'active';
+
+  if (pauseVal === true || pauseVal === 'indefinite' || (pauseVal && pauseVal.type === 'indefinite')) {
+    selectValue = 'indefinite';
+    isPausedActive = true;
+  } else if (pauseVal && typeof pauseVal === 'object' && pauseVal.until) {
+    if (Date.now() < pauseVal.until) {
+      selectValue = pauseVal.type || 'active'; // fallback
+      isPausedActive = true;
+    }
+  }
+
+  if (elements.notifToggleSelect) {
+    elements.notifToggleSelect.value = selectValue;
+    elements.notifToggleSelect.classList.toggle('paused', isPausedActive);
+  }
 }
 
 async function refreshNow(options = {}) {
@@ -809,10 +825,21 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
 });
 
 elements.refreshBtn.addEventListener('click', () => refreshNow());
-elements.notifToggleBtn.addEventListener('click', async () => {
-  const data = await chrome.storage.local.get([NOTIFICATIONS_PAUSED_KEY]);
-  const paused = Boolean(data[NOTIFICATIONS_PAUSED_KEY]);
-  await chrome.storage.local.set({ [NOTIFICATIONS_PAUSED_KEY]: !paused });
+elements.notifToggleSelect.addEventListener('change', async (e) => {
+  const val = e.target.value;
+  let pauseData = false;
+
+  if (val === 'indefinite') {
+    pauseData = 'indefinite';
+  } else if (val !== 'active') {
+    const mins = parseInt(val, 10);
+    pauseData = {
+      until: Date.now() + mins * 60 * 1000,
+      type: val
+    };
+  }
+
+  await chrome.storage.local.set({ [NOTIFICATIONS_PAUSED_KEY]: pauseData });
   await syncNotificationToggleButton();
 });
 

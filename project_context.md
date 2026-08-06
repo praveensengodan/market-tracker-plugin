@@ -41,11 +41,13 @@ All India-trading alerts skip Saturdays/Sundays and NSE holidays via `holidaysMa
    - 9:15 AM: "Market opens now".
 
 2. Market Close Countdown (minute-by-minute)
-   - 2:55 PM to 3:30 PM (inclusive): notification every minute.
-   - 3:30 PM: "Market closes now".
+   - 3:00 PM to 3:15 PM (inclusive): notification every minute.
+   - 3:15 PM: "Market closes now. Closing session starts (3:15 PM - 3:20 PM IST)".
+   - 3:20 PM to 3:25 PM (inclusive): post-market minute-by-minute alerts.
+   - 3:25 PM: "Post-market session closes now".
 
 3. Price Alerts (per configured stock target)
-   - Checked every 1 minute during market hours (9:15 AM to 3:30 PM).
+   - Checked every 1 minute during market hours (9:15 AM to 3:25 PM).
    - Supports both BUY (downward) and SELL (upward) target price directions.
    - Near-target (within 2% above buy target or 2% below sell target): one notification when entering the zone.
    - Target reached (at/below buy target or at/above sell target): repeats every 2 minutes while target condition is met.
@@ -58,7 +60,7 @@ All India-trading alerts skip Saturdays/Sundays and NSE holidays via `holidaysMa
    - Manual Sync API button can force a pull from the popup.
 
 5. Stock Movers (Positive / Negative)
-   - Only during market hours (9:15 AM to 3:30 PM).
+   - Only during market hours (9:15 AM to 3:25 PM).
    - Every 10 minutes: sends Top Positive (>1%) and/or Top Negative (>1%) lists if any exist.
 
 6. India Indices Summary ("Market Tracker - India")
