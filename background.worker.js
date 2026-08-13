@@ -989,7 +989,13 @@ async function runPriceAlertScheduler() {
   const ist = getIstDateParts();
   const isIndiaHoliday = Boolean(getNseHolidayName(ist.dateKey));
   const isIndiaWeekend = isWeekend(ist.weekday);
-  const isTradingHours = !isIndiaHoliday && !isIndiaWeekend && isIndiaMarketHours(ist.minutesSinceMidnight);
+  const minutes = ist.minutesSinceMidnight;
+
+  const isMarketClosedTime = minutes < OPEN_TIME_MINUTES || minutes > (15 * 60 + 30);
+  const isGap1 = minutes >= (15 * 60 + 15) && minutes <= (15 * 60 + 20);
+  const isGap2 = minutes >= (15 * 60 + 25) && minutes <= (15 * 60 + 30);
+
+  const isTradingHours = !isIndiaHoliday && !isIndiaWeekend && !isMarketClosedTime && !isGap1 && !isGap2;
   if (!isTradingHours) {
     return;
   }
@@ -1652,6 +1658,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   return false;
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local' && changes[NOTIFICATIONS_PAUSED_KEY]) {
+    const pauseVal = changes[NOTIFICATIONS_PAUSED_KEY].newValue;
+    const isPaused = pauseVal === true ||
+                     pauseVal === 'indefinite' ||
+                     (pauseVal && (pauseVal.type === 'indefinite' || (pauseVal.until && Date.now() < pauseVal.until)));
+    if (isPaused) {
+      chrome.notifications.getAll((notifications) => {
+        if (notifications) {
+          for (const id of Object.keys(notifications)) {
+            chrome.notifications.clear(id);
+          }
+        }
+      });
+    }
+  }
 });
 
 

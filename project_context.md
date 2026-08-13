@@ -30,7 +30,7 @@
 - API sync uses the final Google Apps Script `/exec` URL and grants both `script.google.com` and `script.googleusercontent.com` host permissions.
 - API alert sync runs at 9:00 AM IST before market open, then hourly during market hours on trading days. The popup also has a manual Sync API button.
 - Background alert schedulers wait for the NSE holiday cache before sending; `holidaysManager.js` also includes 2026 CM holiday fallbacks, including May 28, 2026 (Bakri Id).
-- The popup's pause button applies to market alerts only; price-target alerts are not suppressed by that general pause path.
+- Pausing notifications immediately clears all active/queued notifications (including price alerts) from the system tray and suppresses future ones.
 
 ## Alert Timings (IST)
 
@@ -47,7 +47,9 @@ All India-trading alerts skip Saturdays/Sundays and NSE holidays via `holidaysMa
    - 3:25 PM: "Post-market session closes now".
 
 3. Price Alerts (per configured stock target)
-   - Checked every 1 minute during market hours (9:15 AM to 3:25 PM).
+   - Checked every 1 minute during market hours (9:15 AM to 3:30 PM).
+   - Price alerts are explicitly disabled during closing gaps: 3:15 PM - 3:20 PM and 3:25 PM - 3:30 PM.
+   - Price alerts do not trigger when the market is closed (before 9:15 AM and after 3:30 PM).
    - Supports both BUY (downward) and SELL (upward) target price directions.
    - Near-target (within 2% above buy target or 2% below sell target): one notification when entering the zone.
    - Target reached (at/below buy target or at/above sell target): repeats every 2 minutes while target condition is met.
