@@ -23,6 +23,7 @@ const DEFAULT_PRICE_ALERTS = [
   // { id: 'infy-below-1500', key: 'infy', symbol: 'INFY.NS', name: 'INFY', threshold: 1500 }
 ];
 const PRICE_ALERTS_API_URL = 'https://script.google.com/macros/s/AKfycbxx68RCG2r99m4tpmZyvfddvD5B2_HhWVhxnEoArjmC6tDSQdhZzCcEFtY28M3jxgqA/exec';
+const US_PRICE_ALERTS_API_URL = 'https://script.google.com/macros/s/AKfycbySSc5SudGTpSjnIXbQaoeAsr6mYDXFkR2YPnLvpyVIoQsTbflb1W7Wj_oV1EEq_dqS/exec';
 const DEFAULT_TRACKED_STOCKS = [
   { key: 'ashokley', symbol: 'ASHOKLEY.NS', name: 'ASHOKLEY' },
   { key: 'brigade', symbol: 'BRIGADE.NS', name: 'BRIGADE' },
@@ -53,6 +54,16 @@ const DEFAULT_TRACKED_STOCKS = [
   { key: 'zyduslife', symbol: 'ZYDUSLIFE.NS', name: 'ZYDUSLIFE' }
 ];
 
+const DEFAULT_TRACKED_US_STOCKS = [
+  { key: 'aapl', symbol: 'AAPL', name: 'Apple Inc.' },
+  { key: 'msft', symbol: 'MSFT', name: 'Microsoft Corporation' },
+  { key: 'nvda', symbol: 'NVDA', name: 'NVIDIA Corporation' },
+  { key: 'googl', symbol: 'GOOGL', name: 'Alphabet Inc.' },
+  { key: 'amzn', symbol: 'AMZN', name: 'Amazon.com Inc.' },
+  { key: 'tsla', symbol: 'TSLA', name: 'Tesla, Inc.' },
+  { key: 'meta', symbol: 'META', name: 'Meta Platforms, Inc.' }
+];
+
 const REFRESH_MINUTES = 1;
 const ALERT_CHECK_MINUTES = 1;
 const INDEX_NOTIFY_SCHEDULER_MINUTES = 1;
@@ -62,6 +73,7 @@ const US_TIMEZONE = 'America/New_York';
 
 const OPEN_COUNTDOWN_START_MINUTES = 9 * 60 + 10;
 const ALERT_API_PRE_MARKET_SYNC_MINUTES = 9 * 60;
+const US_ALERT_API_PRE_MARKET_SYNC_MINUTES = 9 * 60;
 const OPEN_TIME_MINUTES = 9 * 60 + 15;
 const CLOSE_COUNTDOWN_START_MINUTES = 15 * 60;
 const CLOSE_TIME_MINUTES = 15 * 60 + 15;
@@ -86,9 +98,13 @@ const LAST_ALERT_KEY = 'lastAlertKey';
 const LAST_INDEX_NOTIFY_KEY = 'lastIndexNotifyBuckets';
 const NOTIFICATIONS_PAUSED_KEY = 'notificationsPaused';
 const TRACKED_STOCKS_KEY = 'trackedStocks';
+const TRACKED_US_STOCKS_KEY = 'trackedUsStocks';
 const PRICE_ALERTS_KEY = 'priceAlerts';
 const PRICE_ALERT_STATES_KEY = 'priceAlertStates';
 const PRICE_ALERT_API_SYNC_KEY = 'priceAlertApiSync';
+const US_PRICE_ALERTS_KEY = 'usPriceAlerts';
+const US_PRICE_ALERT_STATES_KEY = 'usPriceAlertStates';
+const US_PRICE_ALERT_API_SYNC_KEY = 'usPriceAlertApiSync';
 const PRICE_ALERT_NEAR_PERCENT = 2;
 const PRICE_ALERT_REPEAT_MS = 2 * 60 * 1000;
 
@@ -204,6 +220,69 @@ async function getTrackedStocks() {
   return sanitized;
 }
 
+function cloneDefaultTrackedUsStocks() {
+  return DEFAULT_TRACKED_US_STOCKS.map((stock) => ({ ...stock }));
+}
+
+function normalizeUsStockSymbol(symbol) {
+  return String(symbol || '')
+    .trim()
+    .toUpperCase()
+    .replace(/^[A-Z0-9_]+:/i, '')
+    .replace(/\.NS$/i, '');
+}
+
+function sanitizeTrackedUsStock(stock) {
+  const symbol = normalizeUsStockSymbol(stock?.symbol || stock?.displaySymbol || stock?.name);
+  if (!symbol) {
+    return null;
+  }
+
+  const key = normalizeStockKey(symbol);
+  if (!key) {
+    return null;
+  }
+
+  const rawName = String(stock?.name || symbol).trim();
+  const name = rawName || symbol;
+
+  return {
+    key,
+    symbol,
+    name
+  };
+}
+
+async function getTrackedUsStocks() {
+  const storage = await chrome.storage.local.get([TRACKED_US_STOCKS_KEY]);
+
+  if (!Object.prototype.hasOwnProperty.call(storage, TRACKED_US_STOCKS_KEY)) {
+    const defaults = cloneDefaultTrackedUsStocks();
+    await chrome.storage.local.set({ [TRACKED_US_STOCKS_KEY]: defaults });
+    return defaults;
+  }
+
+  const storedStocks = Array.isArray(storage[TRACKED_US_STOCKS_KEY]) ? storage[TRACKED_US_STOCKS_KEY] : [];
+  const seen = new Set();
+  const sanitized = storedStocks
+    .map(sanitizeTrackedUsStock)
+    .filter((stock) => {
+      if (!stock || seen.has(stock.key)) {
+        return false;
+      }
+
+      seen.add(stock.key);
+      return true;
+    });
+
+  if (sanitized.length !== storedStocks.length) {
+    await chrome.storage.local.set({ [TRACKED_US_STOCKS_KEY]: sanitized });
+  }
+
+  return sanitized;
+}
+
+
 
 function cloneDefaultPriceAlerts() {
   return DEFAULT_PRICE_ALERTS.map((alert) => ({ ...alert }));
@@ -276,6 +355,13 @@ async function upsertPriceAlert(alert) {
     throw new Error('Invalid price alert');
   }
 
+  // Ensure stock is also tracked in the stock list
+  await addTrackedStock({
+    key: entry.key,
+    symbol: entry.symbol,
+    name: entry.name
+  });
+
   const alerts = await getPriceAlerts();
   const nextAlerts = [...alerts];
   const existingIndex = nextAlerts.findIndex((item) => item.key === entry.key);
@@ -328,7 +414,12 @@ function sanitizeApiPriceAlert(item) {
 }
 
 async function fetchApiPriceAlerts() {
-  const response = await fetch(PRICE_ALERTS_API_URL, { cache: 'no-store' });
+  const url = new URL(PRICE_ALERTS_API_URL);
+  if (!url.searchParams.has('type')) {
+    url.searchParams.set('type', 'india');
+  }
+
+  const response = await fetch(url.toString(), { cache: 'no-store' });
   if (!response.ok) {
     throw new Error(`Price alert API error: ${response.status}`);
   }
@@ -357,7 +448,20 @@ async function syncPriceAlertsFromApi({ force = false } = {}) {
   const stateStorage = await chrome.storage.local.get([PRICE_ALERT_STATES_KEY]);
   const states = stateStorage[PRICE_ALERT_STATES_KEY] || {};
 
+  // Auto-add any new API alert stocks to trackedStocks
+  const currentTrackedStocks = await getTrackedStocks();
+  const trackedMap = new Map(currentTrackedStocks.map((s) => [s.key, s]));
+  let trackedChanged = false;
+
   for (const apiAlert of apiAlerts) {
+    if (!trackedMap.has(apiAlert.key)) {
+      const sanitized = sanitizeTrackedStock(apiAlert);
+      if (sanitized) {
+        trackedMap.set(sanitized.key, sanitized);
+        trackedChanged = true;
+      }
+    }
+
     const existing = byKey.get(apiAlert.key);
     if (existing) {
       const thresholdChanged = Number(existing.threshold) !== Number(apiAlert.threshold) || existing.type !== apiAlert.type;
@@ -378,6 +482,10 @@ async function syncPriceAlertsFromApi({ force = false } = {}) {
     } else {
       byKey.set(apiAlert.key, apiAlert);
     }
+  }
+
+  if (trackedChanged) {
+    await chrome.storage.local.set({ [TRACKED_STOCKS_KEY]: Array.from(trackedMap.values()) });
   }
 
   const nextAlerts = Array.from(byKey.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -469,6 +577,271 @@ async function resetPriceAlert(id) {
   await chrome.storage.local.set({ [PRICE_ALERT_STATES_KEY]: states });
 }
 
+function sanitizeUsPriceAlert(alert) {
+  const stock = sanitizeTrackedUsStock(alert);
+  const threshold = Number(alert?.threshold ?? alert?.Price ?? alert?.price);
+  if (!stock || !Number.isFinite(threshold) || threshold <= 0) {
+    return null;
+  }
+
+  const rawType = String(alert?.type || alert?.Type || alert?.action || alert?.Action || alert?.direction || alert?.Direction || 'buy').trim().toLowerCase();
+  const normalizedType = (rawType === 'sell' || rawType === 'above' || rawType === 'up') ? 'sell' : 'buy';
+
+  return {
+    id: String(alert?.id || ('us-price-alert-' + stock.key + '-' + String(threshold).replace('.', '_'))),
+    key: stock.key,
+    symbol: stock.symbol,
+    name: stock.name,
+    threshold,
+    source: String(alert?.source || 'manual'),
+    type: normalizedType
+  };
+}
+
+async function getUsPriceAlerts() {
+  const storage = await chrome.storage.local.get([US_PRICE_ALERTS_KEY]);
+  const storedAlerts = Array.isArray(storage[US_PRICE_ALERTS_KEY]) ? storage[US_PRICE_ALERTS_KEY] : [];
+  const byKey = new Map();
+  const sanitizedInput = storedAlerts.map(sanitizeUsPriceAlert).filter(Boolean);
+  for (const alert of sanitizedInput) {
+    byKey.set(alert.key, alert);
+  }
+
+  const sanitized = Array.from(byKey.values());
+  if (alertsChanged(storedAlerts, sanitized)) {
+    await chrome.storage.local.set({ [US_PRICE_ALERTS_KEY]: sanitized });
+  }
+
+  return sanitized;
+}
+
+async function upsertUsPriceAlert(alert) {
+  const entry = sanitizeUsPriceAlert(alert);
+  if (!entry) {
+    throw new Error('Invalid US price alert');
+  }
+
+  // Ensure stock is also tracked in the US stock list
+  await addTrackedUsStock({
+    key: entry.key,
+    symbol: entry.symbol,
+    name: entry.name
+  });
+
+  const alerts = await getUsPriceAlerts();
+  const nextAlerts = [...alerts];
+  const existingIndex = nextAlerts.findIndex((item) => item.key === entry.key);
+
+  if (existingIndex >= 0) {
+    nextAlerts[existingIndex] = {
+      ...nextAlerts[existingIndex],
+      ...entry
+    };
+  } else {
+    nextAlerts.push(entry);
+  }
+
+  const stateStorage = await chrome.storage.local.get([US_PRICE_ALERT_STATES_KEY]);
+  const states = stateStorage[US_PRICE_ALERT_STATES_KEY] || {};
+  delete states[entry.id];
+  const existing = existingIndex >= 0 ? alerts[existingIndex] : null;
+  if (existing?.id && existing.id !== entry.id) {
+    delete states[existing.id];
+  }
+
+  await chrome.storage.local.set({
+    [US_PRICE_ALERTS_KEY]: nextAlerts,
+    [US_PRICE_ALERT_STATES_KEY]: states
+  });
+  return nextAlerts;
+}
+
+async function removeUsPriceAlert(id) {
+  const alerts = await getUsPriceAlerts();
+  const nextAlerts = alerts.filter((alert) => alert.id !== String(id));
+  const stateStorage = await chrome.storage.local.get([US_PRICE_ALERT_STATES_KEY]);
+  const states = stateStorage[US_PRICE_ALERT_STATES_KEY] || {};
+  delete states[String(id)];
+
+  await chrome.storage.local.set({
+    [US_PRICE_ALERTS_KEY]: nextAlerts,
+    [US_PRICE_ALERT_STATES_KEY]: states
+  });
+
+  return nextAlerts;
+}
+
+async function resetUsPriceAlert(id) {
+  const stateStorage = await chrome.storage.local.get([US_PRICE_ALERT_STATES_KEY]);
+  const states = stateStorage[US_PRICE_ALERT_STATES_KEY] || {};
+  delete states[String(id)];
+  await chrome.storage.local.set({ [US_PRICE_ALERT_STATES_KEY]: states });
+}
+
+function sanitizeUsApiPriceAlert(item) {
+  const symbol = normalizeUsStockSymbol(item?.Symbol || item?.symbol);
+  const threshold = Number(item?.Price ?? item?.price);
+  if (!symbol || !Number.isFinite(threshold) || threshold <= 0) {
+    return null;
+  }
+
+  const key = normalizeStockKey(symbol);
+  const rawName = String(item?.Name || item?.name || symbol).trim();
+  const name = rawName || symbol;
+  const rawType = String(item?.type || item?.Type || item?.action || item?.Action || item?.direction || item?.Direction || 'buy').trim().toLowerCase();
+  const normalizedType = (rawType === 'sell' || rawType === 'above' || rawType === 'up') ? 'sell' : 'buy';
+
+  return {
+    id: `us-price-alert-${key}`,
+    key,
+    symbol,
+    name,
+    threshold,
+    source: 'api',
+    type: normalizedType
+  };
+}
+
+async function fetchUsApiPriceAlerts() {
+  const url = new URL(US_PRICE_ALERTS_API_URL);
+  if (!url.searchParams.has('type')) {
+    url.searchParams.set('type', 'us');
+  }
+
+  const response = await fetch(url.toString(), { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`US Price alert API error: ${response.status}`);
+  }
+
+  const payload = await response.json();
+  if (!Array.isArray(payload)) {
+    throw new Error('US Price alert API returned invalid data');
+  }
+
+  return payload.map(sanitizeUsApiPriceAlert).filter(Boolean);
+}
+
+async function syncUsPriceAlertsFromApi({ force = false } = {}) {
+  const us = getZonedDateParts(US_TIMEZONE);
+  const isHoliday = isUsHoliday(us.dateKey);
+  const isUsWknd = isWeekend(us.weekday);
+  const isTradingHours = !isHoliday && !isUsWknd && isUsMarketHours(us.minutesSinceMidnight);
+  if (!force && (!isTradingHours && us.minutesSinceMidnight !== US_ALERT_API_PRE_MARKET_SYNC_MINUTES)) {
+    return { ok: true, skipped: 'non-trading-time' };
+  }
+
+  const apiAlerts = await fetchUsApiPriceAlerts();
+  const alerts = await getUsPriceAlerts();
+  const byKey = new Map(alerts.map((alert) => [alert.key, alert]));
+  const stateStorage = await chrome.storage.local.get([US_PRICE_ALERT_STATES_KEY]);
+  const states = stateStorage[US_PRICE_ALERT_STATES_KEY] || {};
+
+  // Auto-add any new API alert stocks to trackedUsStocks
+  const currentTrackedStocks = await getTrackedUsStocks();
+  const trackedMap = new Map(currentTrackedStocks.map((s) => [s.key, s]));
+  let trackedChanged = false;
+
+  for (const apiAlert of apiAlerts) {
+    if (!trackedMap.has(apiAlert.key)) {
+      const sanitized = sanitizeTrackedUsStock(apiAlert);
+      if (sanitized) {
+        trackedMap.set(sanitized.key, sanitized);
+        trackedChanged = true;
+      }
+    }
+
+    const existing = byKey.get(apiAlert.key);
+    if (existing) {
+      const thresholdChanged = Number(existing.threshold) !== Number(apiAlert.threshold) || existing.type !== apiAlert.type;
+      if (thresholdChanged) {
+        delete states[existing.id];
+        delete states[apiAlert.id];
+      }
+
+      byKey.set(apiAlert.key, {
+        ...existing,
+        id: apiAlert.id,
+        symbol: apiAlert.symbol,
+        name: apiAlert.name,
+        threshold: apiAlert.threshold,
+        source: 'api',
+        type: apiAlert.type
+      });
+    } else {
+      byKey.set(apiAlert.key, apiAlert);
+    }
+  }
+
+  if (trackedChanged) {
+    await chrome.storage.local.set({ [TRACKED_US_STOCKS_KEY]: Array.from(trackedMap.values()) });
+  }
+
+  const nextAlerts = Array.from(byKey.values()).sort((a, b) => a.name.localeCompare(b.name));
+  const activeIds = new Set(nextAlerts.map((alert) => alert.id));
+  for (const stateId of Object.keys(states)) {
+    if (!activeIds.has(stateId)) {
+      delete states[stateId];
+    }
+  }
+
+  await chrome.storage.local.set({
+    [US_PRICE_ALERTS_KEY]: nextAlerts,
+    [US_PRICE_ALERT_STATES_KEY]: states,
+    [US_PRICE_ALERT_API_SYNC_KEY]: {
+      lastSyncedAt: Date.now(),
+      count: apiAlerts.length
+    }
+  });
+
+  return { ok: true, count: apiAlerts.length };
+}
+
+async function runUsPriceAlertApiSyncScheduler() {
+  const us = getZonedDateParts(US_TIMEZONE);
+  const isHoliday = isUsHoliday(us.dateKey);
+  const isUsWknd = isWeekend(us.weekday);
+  if (isHoliday || isUsWknd) {
+    return;
+  }
+
+  let bucket = null;
+  if (us.minutesSinceMidnight === US_ALERT_API_PRE_MARKET_SYNC_MINUTES) {
+    bucket = `${us.dateKey}-us-preopen-0900`;
+  } else if (isUsMarketHours(us.minutesSinceMidnight) && us.minutesSinceMidnight % 60 === 0) {
+    bucket = `${us.dateKey}-us-market-${Math.floor(us.minutesSinceMidnight / 60)}`;
+  }
+
+  if (!bucket) {
+    return;
+  }
+
+  const storage = await chrome.storage.local.get([US_PRICE_ALERT_API_SYNC_KEY]);
+  const syncState = storage[US_PRICE_ALERT_API_SYNC_KEY] || {};
+  if (syncState.lastSchedulerBucket === bucket) {
+    return;
+  }
+
+  try {
+    const result = await syncUsPriceAlertsFromApi({ force: true });
+    await chrome.storage.local.set({
+      [US_PRICE_ALERT_API_SYNC_KEY]: {
+        ...syncState,
+        lastSchedulerBucket: bucket,
+        lastSyncedAt: Date.now(),
+        count: result.count || 0,
+        lastError: null
+      }
+    });
+  } catch (error) {
+    await chrome.storage.local.set({
+      [US_PRICE_ALERT_API_SYNC_KEY]: {
+        ...syncState,
+        lastError: error?.message || 'Failed to sync US price alerts'
+      }
+    });
+  }
+}
+
 function buildStockConfig(trackedStocks) {
   return Object.fromEntries(
     trackedStocks.map((stock) => [
@@ -508,6 +881,35 @@ async function removeTrackedStock(key) {
   await chrome.storage.local.set({ [TRACKED_STOCKS_KEY]: nextStocks });
   return nextStocks;
 }
+
+async function addTrackedUsStock(stock) {
+  const entry = sanitizeTrackedUsStock(stock);
+  if (!entry) {
+    throw new Error('Invalid US stock');
+  }
+
+  const trackedStocks = await getTrackedUsStocks();
+  const nextStocks = [...trackedStocks];
+  const existingIndex = nextStocks.findIndex((item) => item.key === entry.key);
+
+  if (existingIndex >= 0) {
+    nextStocks[existingIndex] = entry;
+  } else {
+    nextStocks.push(entry);
+  }
+
+  await chrome.storage.local.set({ [TRACKED_US_STOCKS_KEY]: nextStocks });
+  return nextStocks;
+}
+
+async function removeTrackedUsStock(key) {
+  const normalizedKey = normalizeStockKey(key);
+  const trackedStocks = await getTrackedUsStocks();
+  const nextStocks = trackedStocks.filter((stock) => stock.key !== normalizedKey);
+  await chrome.storage.local.set({ [TRACKED_US_STOCKS_KEY]: nextStocks });
+  return nextStocks;
+}
+
 
 async function fetchIndexFromYahoo(symbol, name) {
   const encodedSymbol = encodeURIComponent(symbol);
@@ -685,6 +1087,86 @@ async function searchNseStocks(query) {
   );
 }
 
+async function searchUsStocks(query) {
+  const text = String(query || '').trim();
+  if (text.length < 1) {
+    return [];
+  }
+
+  const usExchanges = new Set(['NASDAQ', 'NYSE', 'AMEX', 'BATS', 'ARCA']);
+
+  try {
+    const rows = await fetchTradingViewSymbolSearch(text);
+    const results = mapSearchRowsToStocks(
+      rows.filter((row) => {
+        const ex = String(row?.exchange || '').toUpperCase();
+        const type = String(row?.type || '').toLowerCase();
+        return (usExchanges.has(ex) || row?.country === 'US') && (type === 'stock' || type === 'dr' || !type);
+      }),
+      (row) => {
+        const displaySymbol = String(row?.symbol || '').trim().toUpperCase();
+        if (!displaySymbol) {
+          return null;
+        }
+
+        const item = sanitizeTrackedUsStock({
+          symbol: displaySymbol,
+          name: String(row?.description || displaySymbol).trim() || displaySymbol
+        });
+
+        if (!item) {
+          return null;
+        }
+
+        return {
+          key: item.key,
+          symbol: item.symbol,
+          name: item.name,
+          displaySymbol
+        };
+      }
+    );
+
+    if (results.length > 0) {
+      return results;
+    }
+  } catch (_error) {
+    // Fall through to Yahoo search
+  }
+
+  const yahooRows = await fetchYahooSymbolSearch(text);
+  return mapSearchRowsToStocks(
+    yahooRows.filter((row) => {
+      const ex = String(row?.exchange || '').toUpperCase();
+      const quoteType = String(row?.quoteType || '').toUpperCase();
+      return (usExchanges.has(ex) || ex === 'NMS' || ex === 'NYQ' || ex === 'NGM' || ex === 'NCM') && quoteType === 'EQUITY';
+    }),
+    (row) => {
+      const rawSymbol = String(row?.symbol || '').trim().toUpperCase();
+      if (!rawSymbol || rawSymbol.includes('.')) {
+        return null;
+      }
+
+      const item = sanitizeTrackedUsStock({
+        symbol: rawSymbol,
+        name: String(row?.shortname || row?.longname || rawSymbol).trim() || rawSymbol
+      });
+
+      if (!item) {
+        return null;
+      }
+
+      return {
+        key: item.key,
+        symbol: item.symbol,
+        name: item.name,
+        displaySymbol: rawSymbol
+      };
+    }
+  );
+}
+
+
 function buildTradingViewCandidates(config, searchRows) {
   const base = Array.isArray(config.tradingviewSymbols) ? [...config.tradingviewSymbols] : [];
 
@@ -853,9 +1335,11 @@ async function refreshMarketData(options = {}) {
   }
 
   const trackedStocks = await getTrackedStocks();
+  const trackedUsStocks = await getTrackedUsStocks();
   const priceAlerts = await getPriceAlerts();
   const stockUniverse = [
     ...trackedStocks,
+    ...trackedUsStocks,
     ...priceAlerts.map((alert) => ({ key: alert.key, symbol: alert.symbol, name: alert.name }))
   ];
   const indexEntries = Object.entries(INDEX_CONFIG);
@@ -984,6 +1468,54 @@ async function refreshPriceAlertPrices() {
   return nextMarketData;
 }
 
+async function refreshUsPriceAlertPrices() {
+  const alerts = await getUsPriceAlerts();
+  if (alerts.length === 0) {
+    return null;
+  }
+
+  const uniqueStocks = new Map();
+  for (const alert of alerts) {
+    uniqueStocks.set(alert.key, { key: alert.key, symbol: alert.symbol, name: alert.name });
+  }
+
+  const entries = Array.from(uniqueStocks.values());
+  const results = await Promise.all(
+    entries.map(async (entry) => {
+      try {
+        const data = await fetchIndexFromYahoo(entry.symbol, entry.name);
+        return { ok: true, key: entry.key, data };
+      } catch (error) {
+        return { ok: false, key: entry.key, error: error?.message || 'Unknown fetch error' };
+      }
+    })
+  );
+
+  const storage = await chrome.storage.local.get([STORAGE_KEY]);
+  const marketData = storage[STORAGE_KEY] || { india: {}, global: {}, stocks: {} };
+  const nextStocks = { ...(marketData.stocks || {}) };
+
+  let updated = false;
+  for (const result of results) {
+    if (result.ok) {
+      nextStocks[result.key] = result.data;
+      updated = true;
+    }
+  }
+
+  if (!updated) {
+    return null;
+  }
+
+  const nextMarketData = { ...marketData, stocks: nextStocks };
+  await chrome.storage.local.set({
+    [STORAGE_KEY]: nextMarketData,
+    [LAST_UPDATED_KEY]: Date.now()
+  });
+
+  return nextMarketData;
+}
+
 async function runPriceAlertScheduler() {
   await ensureHolidaysCacheLoaded();
   const ist = getIstDateParts();
@@ -1008,6 +1540,23 @@ async function runPriceAlertScheduler() {
   await runPriceAlertChecks(marketData);
 }
 
+async function runUsPriceAlertScheduler() {
+  const us = getZonedDateParts(US_TIMEZONE);
+  const isHoliday = isUsHoliday(us.dateKey);
+  const isUsWknd = isWeekend(us.weekday);
+  const isTradingHours = !isHoliday && !isUsWknd && isUsMarketHours(us.minutesSinceMidnight);
+
+  if (!isTradingHours) {
+    return;
+  }
+
+  const marketData = await refreshUsPriceAlertPrices();
+  if (!marketData) {
+    return;
+  }
+
+  await runUsPriceAlertChecks(marketData);
+}
 
 async function runPriceAlertChecks(marketData) {
   const alerts = await getPriceAlerts();
@@ -1047,17 +1596,24 @@ async function runPriceAlertChecks(marketData) {
     const shouldRepeatTarget =
       isTargetMet && (!lastTargetNotifiedAt || now - lastTargetNotifiedAt >= PRICE_ALERT_REPEAT_MS);
 
+    const timeStr = new Date().toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+
     if (isTargetMet && shouldRepeatTarget) {
       await sendPriceAlert({
         id: `price-alert-${alert.id}-${Date.now()}`,
         title: 'Market Tracker - Price Alert',
-        message: `${alert.name}: ${formatPrice(stockData.price)} reached target ${formatPrice(alert.threshold)} (${alert.type.toUpperCase()})`
+        message: `${alert.name}: ₹${formatPrice(stockData.price)} reached target ₹${formatPrice(alert.threshold)} (${alert.type.toUpperCase()}) [${timeStr} IST]`
       });
     } else if (isNear && !wasNear) {
       await sendPriceAlert({
         id: `price-alert-near-${alert.id}-${Date.now()}`,
         title: 'Market Tracker - Near Price Alert',
-        message: `${alert.name}: ${formatPrice(stockData.price)} is near target ${formatPrice(alert.threshold)} (${alert.type.toUpperCase()})`
+        message: `${alert.name}: ₹${formatPrice(stockData.price)} is near target ₹${formatPrice(alert.threshold)} (${alert.type.toUpperCase()}) [${timeStr} IST]`
       });
     }
 
@@ -1075,6 +1631,82 @@ async function runPriceAlertChecks(marketData) {
 
   if (changed) {
     await chrome.storage.local.set({ [PRICE_ALERT_STATES_KEY]: states });
+  }
+}
+
+async function runUsPriceAlertChecks(marketData) {
+  const alerts = await getUsPriceAlerts();
+  if (alerts.length === 0) {
+    return;
+  }
+
+  const storage = await chrome.storage.local.get([US_PRICE_ALERT_STATES_KEY]);
+  const states = storage[US_PRICE_ALERT_STATES_KEY] || {};
+  let changed = false;
+  const now = Date.now();
+
+  for (const alert of alerts) {
+    const stockData = marketData?.stocks?.[alert.key];
+    if (!stockData || typeof stockData.price !== 'number') {
+      continue;
+    }
+
+    const state = states[alert.id] || {};
+    const isBuy = alert.type === 'buy';
+
+    let isNear = false;
+    let isTargetMet = false;
+
+    if (isBuy) {
+      const nearUpperBound = alert.threshold * (1 + PRICE_ALERT_NEAR_PERCENT / 100);
+      isNear = stockData.price <= nearUpperBound;
+      isTargetMet = stockData.price <= alert.threshold;
+    } else {
+      const nearLowerBound = alert.threshold * (1 - PRICE_ALERT_NEAR_PERCENT / 100);
+      isNear = stockData.price >= nearLowerBound;
+      isTargetMet = stockData.price >= alert.threshold;
+    }
+
+    const wasNear = Boolean(state.near);
+    const lastTargetNotifiedAt = Number(state.lastTargetNotifiedAt || 0);
+    const shouldRepeatTarget =
+      isTargetMet && (!lastTargetNotifiedAt || now - lastTargetNotifiedAt >= PRICE_ALERT_REPEAT_MS);
+
+    const timeStr = new Date().toLocaleTimeString('en-US', {
+      timeZone: US_TIMEZONE,
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+
+    if (isTargetMet && shouldRepeatTarget) {
+      await sendPriceAlert({
+        id: `us-price-alert-${alert.id}-${Date.now()}`,
+        title: 'Market Tracker - US Price Alert',
+        message: `${alert.name}: $${formatPrice(stockData.price)} reached target $${formatPrice(alert.threshold)} (${alert.type.toUpperCase()}) [${timeStr} ET]`
+      });
+    } else if (isNear && !wasNear) {
+      await sendPriceAlert({
+        id: `us-price-alert-near-${alert.id}-${Date.now()}`,
+        title: 'Market Tracker - Near US Price Alert',
+        message: `${alert.name}: $${formatPrice(stockData.price)} is near target $${formatPrice(alert.threshold)} (${alert.type.toUpperCase()}) [${timeStr} ET]`
+      });
+    }
+
+    if (isNear || state.near || state.targetMet) {
+      states[alert.id] = {
+        near: isNear,
+        targetMet: isTargetMet,
+        lastPrice: stockData.price,
+        lastNearNotifiedAt: isNear && !wasNear ? now : state.lastNearNotifiedAt || null,
+        lastTargetNotifiedAt: shouldRepeatTarget ? now : state.lastTargetNotifiedAt || null
+      };
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await chrome.storage.local.set({ [US_PRICE_ALERT_STATES_KEY]: states });
   }
 }
 function updateBadge(marketData) {
@@ -1547,7 +2179,15 @@ function ensureAlarms() {
     periodInMinutes: 1
   });
 
+  chrome.alarms.create('usPriceAlertScheduler', {
+    periodInMinutes: 1
+  });
+
   chrome.alarms.create('priceAlertApiSyncScheduler', {
+    periodInMinutes: 1
+  });
+
+  chrome.alarms.create('usPriceAlertApiSyncScheduler', {
     periodInMinutes: 1
   });
 }
@@ -1556,7 +2196,9 @@ chrome.runtime.onInstalled.addListener(async () => {
   ensureAlarms();
   await initializeHolidaysCache();
   await getTrackedStocks();
+  await getTrackedUsStocks();
   await getPriceAlerts();
+  await getUsPriceAlerts();
   await refreshMarketData();
   await checkMarketAlerts();
   await runIndexNotificationScheduler();
@@ -1584,8 +2226,16 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     runPriceAlertScheduler();
   }
 
+  if (alarm.name === 'usPriceAlertScheduler') {
+    runUsPriceAlertScheduler();
+  }
+
   if (alarm.name === 'priceAlertApiSyncScheduler') {
     runPriceAlertApiSyncScheduler();
+  }
+
+  if (alarm.name === 'usPriceAlertApiSyncScheduler') {
+    runUsPriceAlertApiSyncScheduler();
   }
 });
 
@@ -1624,6 +2274,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'search-us-stocks') {
+    searchUsStocks(message.query)
+      .then((results) => sendResponse({ ok: true, results }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'US search failed' }));
+
+    return true;
+  }
+
+  if (message?.type === 'add-us-stock') {
+    addTrackedUsStock(message.stock)
+      .then(() => refreshMarketData({ force: true }))
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to add US stock' }));
+
+    return true;
+  }
+
+  if (message?.type === 'remove-us-stock') {
+    removeTrackedUsStock(message.key)
+      .then(() => refreshMarketData({ force: true }))
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to remove US stock' }));
+
+    return true;
+  }
+
   if (message?.type === 'upsert-price-alert') {
     upsertPriceAlert(message.alert)
       .then(() => refreshMarketData({ force: true }))
@@ -1649,10 +2325,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'upsert-us-price-alert') {
+    upsertUsPriceAlert(message.alert)
+      .then(() => refreshMarketData({ force: true }))
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to save US alert' }));
+
+    return true;
+  }
+
+  if (message?.type === 'remove-us-price-alert') {
+    removeUsPriceAlert(message.id)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to remove US alert' }));
+
+    return true;
+  }
+
+  if (message?.type === 'reset-us-price-alert') {
+    resetUsPriceAlert(message.id)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to reset US alert' }));
+
+    return true;
+  }
+
   if (message?.type === 'sync-price-alerts-api') {
     syncPriceAlertsFromApi({ force: true })
       .then((result) => sendResponse({ ok: true, count: result.count || 0 }))
       .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to sync price alerts' }));
+
+    return true;
+  }
+
+  if (message?.type === 'sync-us-price-alerts-api') {
+    syncUsPriceAlertsFromApi({ force: true })
+      .then((result) => sendResponse({ ok: true, count: result.count || 0 }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to sync US price alerts' }));
 
     return true;
   }

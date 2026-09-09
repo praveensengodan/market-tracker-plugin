@@ -9,7 +9,13 @@
   <body>
     <main class="app">
       <header class="header">
-        <h1>Market Tracker</h1>
+        <div class="header-left">
+          <h1>Market Tracker</h1>
+          <div class="market-status-pills">
+            <span id="indiaMarketStatus" class="market-pill">India: --</span>
+            <span id="usMarketStatus" class="market-pill">US: --</span>
+          </div>
+        </div>
         <div class="header-actions">
           <select id="notifToggleSelect" class="ghost-btn" style="cursor: pointer;" title="Notification Settings">
             <option value="active">Alerts Active</option>
@@ -69,6 +75,18 @@
       </section>
 
       <section class="tab-panel" id="tab-global">
+        <section class="timer-card">
+          <div class="timer-title">US Market Timers (ET)</div>
+          <div class="timer-row">
+            <span>Phase</span>
+            <span id="usMarketPhase">--</span>
+          </div>
+          <div class="timer-row">
+            <span id="usNextEventLabel">Next</span>
+            <span id="usNextEventTimer">--</span>
+          </div>
+        </section>
+
         <section class="cards">
           <article class="card" data-key="sp500">
             <div class="card-title">S&P 500</div>
@@ -104,47 +122,77 @@
 
       <section class="tab-panel" id="tab-stocks">
         <nav class="inner-tabs" aria-label="Stocks Tabs">
-          <button class="inner-tab-btn active" type="button" data-inner-tab="tracker">Main Stock Tracker</button>
-          <button class="inner-tab-btn" type="button" data-inner-tab="alerts">Alerts</button>
+          <button class="inner-tab-btn active" type="button" data-inner-tab="tracker">
+            <span>India Stocks</span>
+            <span id="indiaStockCountBadge" class="tab-count-badge">0</span>
+          </button>
+          <button class="inner-tab-btn" type="button" data-inner-tab="us-tracker">
+            <span>US Stocks</span>
+            <span id="usStockCountBadge" class="tab-count-badge">0</span>
+          </button>
         </nav>
 
         <section class="inner-tab-panel active" id="inner-tab-tracker">
           <section class="stock-board">
             <div class="stock-board-head">
-              <div class="stock-board-title">Stock Tracker</div>
-              <select id="stockSort" class="stock-sort">
-                <option value="alpha">Alpha</option>
-                <option value="changeAsc" selected>Change % Low-High</option>
-                <option value="changeDesc">Change % High-Low</option>
-              </select>
+              <div class="stock-board-title">India Stock Tracker</div>
+              <div class="stock-board-actions">
+                <button id="syncApiAlertsBtn" type="button" class="alert-sync-btn" title="Sync alerts from Google Script API">Sync API</button>
+                <select id="stockSort" class="stock-sort">
+                  <option value="alpha">Alpha</option>
+                  <option value="changeAsc" selected>Change % Low-High</option>
+                  <option value="changeDesc">Change % High-Low</option>
+                </select>
+              </div>
             </div>
+
+            <!-- Quick Filter Chips -->
+            <div class="stock-filters" id="indiaStockFilters">
+              <button type="button" class="filter-chip active" data-filter="all">All</button>
+              <button type="button" class="filter-chip" data-filter="alerts">Alerts</button>
+              <button type="button" class="filter-chip" data-filter="near">Near/Met</button>
+              <button type="button" class="filter-chip" data-filter="gainers">Gainers (+)</button>
+              <button type="button" class="filter-chip" data-filter="losers">Losers (-)</button>
+            </div>
+
             <div class="stock-search-shell">
               <input id="stockSearchInput" class="stock-search-input" type="search" placeholder="Add stock by name or symbol" autocomplete="off" spellcheck="false" />
+              <button type="button" id="clearStockSearchBtn" class="search-clear-btn hidden" title="Clear">✖</button>
               <div id="stockSearchResults" class="stock-search-results" hidden></div>
             </div>
             <div id="stocksList"></div>
           </section>
         </section>
 
-        <section class="inner-tab-panel" id="inner-tab-alerts">
-          <section class="alerts-board">
-            <div class="alerts-board-head">
-              <div class="stock-board-title">Price Alerts</div>
-              <button id="syncApiAlertsBtn" type="button" class="alert-sync-btn">Sync API</button>
-            </div>
-            <div class="alert-form-grid">
-              <div class="stock-search-shell">
-                <input id="alertStockSearchInput" class="stock-search-input" type="search" placeholder="Search stock for alert" autocomplete="off" spellcheck="false" />
-                <div id="alertSearchResults" class="stock-search-results" hidden></div>
+        <section class="inner-tab-panel" id="inner-tab-us-tracker">
+          <section class="stock-board">
+            <div class="stock-board-head">
+              <div class="stock-board-title">US Stock Tracker</div>
+              <div class="stock-board-actions">
+                <button id="syncUsApiAlertsBtn" type="button" class="alert-sync-btn" title="Sync US alerts from Google Script API">Sync API</button>
+                <select id="usStockSort" class="stock-sort">
+                  <option value="alpha">Alpha</option>
+                  <option value="changeAsc" selected>Change % Low-High</option>
+                  <option value="changeDesc">Change % High-Low</option>
+                </select>
               </div>
-              <select id="alertTypeSelect" class="alert-type-select">
-                <option value="buy" selected>Buy</option>
-                <option value="sell">Sell</option>
-              </select>
-              <input id="alertThresholdInput" class="alert-threshold-input" type="number" min="0" step="0.01" placeholder="Target price" />
-              <button id="addAlertBtn" type="button" class="alert-add-btn">Add Alert</button>
             </div>
-            <div id="priceAlertsList"></div>
+
+            <!-- Quick Filter Chips for US -->
+            <div class="stock-filters" id="usStockFilters">
+              <button type="button" class="filter-chip active" data-filter="all">All</button>
+              <button type="button" class="filter-chip" data-filter="alerts">Alerts</button>
+              <button type="button" class="filter-chip" data-filter="near">Near/Met</button>
+              <button type="button" class="filter-chip" data-filter="gainers">Gainers (+)</button>
+              <button type="button" class="filter-chip" data-filter="losers">Losers (-)</button>
+            </div>
+
+            <div class="stock-search-shell">
+              <input id="usStockSearchInput" class="stock-search-input" type="search" placeholder="Add US stock by symbol or name (e.g. AAPL, NVDA)" autocomplete="off" spellcheck="false" />
+              <button type="button" id="clearUsStockSearchBtn" class="search-clear-btn hidden" title="Clear">✖</button>
+              <div id="usStockSearchResults" class="stock-search-results" hidden></div>
+            </div>
+            <div id="usStocksList"></div>
           </section>
         </section>
       </section>

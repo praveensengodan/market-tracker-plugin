@@ -4,15 +4,49 @@ const STORAGE_KEY = 'marketData';
 const LAST_UPDATED_KEY = 'lastUpdatedAt';
 const NOTIFICATIONS_PAUSED_KEY = 'notificationsPaused';
 const TRACKED_STOCKS_KEY = 'trackedStocks';
+const TRACKED_US_STOCKS_KEY = 'trackedUsStocks';
 const PRICE_ALERTS_KEY = 'priceAlerts';
+const US_PRICE_ALERTS_KEY = 'usPriceAlerts';
 const POPUP_REFRESH_INTERVAL_MS = 10000;
 const TIMER_REFRESH_INTERVAL_MS = 1000;
 
 const IST_OFFSET_MINUTES = 330;
+const US_TIMEZONE = 'America/New_York';
 const PRE_OPEN_MINUTES = 9 * 60;
 const MARKET_OPEN_MINUTES = 9 * 60 + 15;
 const MARKET_CLOSE_MINUTES = 15 * 60 + 30;
+const US_OPEN_MINUTES = 9 * 60 + 30;
+const US_CLOSE_MINUTES = 16 * 60;
 const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const WEEKDAY_MAP = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+const US_HOLIDAYS = {
+  '2025-01-01': "New Year's Day",
+  '2025-01-20': 'Martin Luther King Jr. Day',
+  '2025-02-17': "Presidents' Day / Washington's Birthday",
+  '2025-04-18': 'Good Friday',
+  '2025-05-26': 'Memorial Day',
+  '2025-06-19': 'Juneteenth',
+  '2025-07-04': 'Independence Day',
+  '2025-09-01': 'Labor Day',
+  '2025-11-27': 'Thanksgiving Day',
+  '2025-12-25': 'Christmas Day',
+  '2026-01-01': "New Year's Day",
+  '2026-01-19': 'Martin Luther King Jr. Day',
+  '2026-02-16': "Presidents' Day / Washington's Birthday",
+  '2026-04-03': 'Good Friday',
+  '2026-05-25': 'Memorial Day',
+  '2026-06-19': 'Juneteenth',
+  '2026-07-03': 'Independence Day (Observed)',
+  '2026-09-07': 'Labor Day',
+  '2026-11-26': 'Thanksgiving Day',
+  '2026-12-25': 'Christmas Day'
+};
+
+function isUsHoliday(dateKey) {
+  return Boolean(US_HOLIDAYS[dateKey]);
+}
+
 const DEFAULT_TRACKED_STOCKS = [
   { key: 'ashokley', symbol: 'ASHOKLEY.NS', name: 'ASHOKLEY' },
   { key: 'brigade', symbol: 'BRIGADE.NS', name: 'BRIGADE' },
@@ -43,24 +77,44 @@ const DEFAULT_TRACKED_STOCKS = [
   { key: 'zyduslife', symbol: 'ZYDUSLIFE.NS', name: 'ZYDUSLIFE' }
 ];
 
+const DEFAULT_TRACKED_US_STOCKS = [
+  { key: 'aapl', symbol: 'AAPL', name: 'Apple Inc.' },
+  { key: 'msft', symbol: 'MSFT', name: 'Microsoft Corporation' },
+  { key: 'nvda', symbol: 'NVDA', name: 'NVIDIA Corporation' },
+  { key: 'googl', symbol: 'GOOGL', name: 'Alphabet Inc. (Google)' },
+  { key: 'amzn', symbol: 'AMZN', name: 'Amazon.com, Inc.' },
+  { key: 'tsla', symbol: 'TSLA', name: 'Tesla, Inc.' },
+  { key: 'meta', symbol: 'META', name: 'Meta Platforms, Inc.' }
+];
+
 const elements = {
   refreshBtn: document.getElementById('refreshBtn'),
   statusText: document.getElementById('statusText'),
+  indiaMarketStatus: document.getElementById('indiaMarketStatus'),
+  usMarketStatus: document.getElementById('usMarketStatus'),
   marketPhase: document.getElementById('marketPhase'),
   nextEventLabel: document.getElementById('nextEventLabel'),
   nextEventTimer: document.getElementById('nextEventTimer'),
+  usMarketPhase: document.getElementById('usMarketPhase'),
+  usNextEventLabel: document.getElementById('usNextEventLabel'),
+  usNextEventTimer: document.getElementById('usNextEventTimer'),
   stocksList: document.getElementById('stocksList'),
-  priceAlertsList: document.getElementById('priceAlertsList'),
+  usStocksList: document.getElementById('usStocksList'),
+  indiaStockCountBadge: document.getElementById('indiaStockCountBadge'),
+  usStockCountBadge: document.getElementById('usStockCountBadge'),
+  indiaStockFilters: document.getElementById('indiaStockFilters'),
+  usStockFilters: document.getElementById('usStockFilters'),
   notifToggleSelect: document.getElementById('notifToggleSelect'),
   stockSort: document.getElementById('stockSort'),
   stockSearchInput: document.getElementById('stockSearchInput'),
+  clearStockSearchBtn: document.getElementById('clearStockSearchBtn'),
   stockSearchResults: document.getElementById('stockSearchResults'),
-  alertStockSearchInput: document.getElementById('alertStockSearchInput'),
-  alertSearchResults: document.getElementById('alertSearchResults'),
-  alertTypeSelect: document.getElementById('alertTypeSelect'),
-  alertThresholdInput: document.getElementById('alertThresholdInput'),
-  addAlertBtn: document.getElementById('addAlertBtn'),
+  usStockSort: document.getElementById('usStockSort'),
+  usStockSearchInput: document.getElementById('usStockSearchInput'),
+  clearUsStockSearchBtn: document.getElementById('clearUsStockSearchBtn'),
+  usStockSearchResults: document.getElementById('usStockSearchResults'),
   syncApiAlertsBtn: document.getElementById('syncApiAlertsBtn'),
+  syncUsApiAlertsBtn: document.getElementById('syncUsApiAlertsBtn'),
   niftyPrice: document.getElementById('niftyPrice'),
   niftyDelta: document.getElementById('niftyDelta'),
   bankNiftyPrice: document.getElementById('bankNiftyPrice'),
@@ -90,22 +144,32 @@ const tabPanels = {
 };
 const innerTabPanels = {
   tracker: document.getElementById('inner-tab-tracker'),
-  alerts: document.getElementById('inner-tab-alerts')
+  'us-tracker': document.getElementById('inner-tab-us-tracker')
 };
 
 const lastRenderedPrices = {};
+let currentActiveTab = 'india';
+let currentInnerActiveTab = 'tracker';
+let lastUpdatedTimestamp = null;
+let lastErrorState = null;
 let refreshInFlight = false;
 let currentStockSort = 'changeAsc';
+let currentUsStockSort = 'changeAsc';
+let currentIndiaFilter = 'all';
+let currentUsFilter = 'all';
 let trackedStocks = cloneList(DEFAULT_TRACKED_STOCKS);
+let trackedUsStocks = cloneList(DEFAULT_TRACKED_US_STOCKS);
 let priceAlerts = [];
+let usPriceAlerts = [];
 let stockSearchResultsState = [];
-let alertSearchResultsState = [];
-let selectedAlertStock = null;
+let usStockSearchResultsState = [];
 let searchRequestId = 0;
 let searchDebounceTimer = null;
-let alertSearchRequestId = 0;
-let alertSearchDebounceTimer = null;
+let usSearchRequestId = 0;
+let usSearchDebounceTimer = null;
 let latestMarketStocks = {};
+let openAlertEditors = new Set();
+let openUsAlertEditors = new Set();
 
 function cloneList(items) {
   return items.map((item) => ({ ...item }));
@@ -185,20 +249,50 @@ function renderIndex(indexKey, priceEl, deltaEl, indexData) {
 }
 
 function getTradingViewStockUrl(symbol) {
-  const baseSymbol = String(symbol || '').toUpperCase().replace(/\.NS$/i, '');
-  return `https://in.tradingview.com/symbols/NSE-${baseSymbol}/`;
+  const sym = String(symbol || '').toUpperCase();
+  if (sym.endsWith('.NS')) {
+    const baseSymbol = sym.replace(/\.NS$/i, '');
+    return `https://in.tradingview.com/symbols/NSE-${baseSymbol}/`;
+  }
+  return `https://www.tradingview.com/symbols/${encodeURIComponent(sym)}/`;
 }
 
 function getTrackedStockByKey(key) {
   return trackedStocks.find((stock) => stock.key === key) || null;
 }
 
+function getTrackedUsStockByKey(key) {
+  return trackedUsStocks.find((stock) => stock.key === key) || null;
+}
+
 function getPriceAlertById(id) {
   return priceAlerts.find((alert) => alert.id === id) || null;
 }
 
+function filterStockEntries(entries, filterType, isUs = false) {
+  if (filterType === 'alerts') {
+    return entries.filter((s) => isUs ? getUsStockPriceAlert(s.key) : getStockPriceAlert(s.key));
+  }
+  if (filterType === 'near') {
+    return entries.filter((s) => {
+      const alert = isUs ? getUsStockPriceAlert(s.key) : getStockPriceAlert(s.key);
+      if (!alert) return false;
+      const livePrice = latestMarketStocks[s.key]?.price;
+      const status = getAlertStatusMeta(livePrice, alert.threshold, alert.type || 'buy');
+      return status.className === 'near' || status.className === 'met';
+    });
+  }
+  if (filterType === 'gainers') {
+    return entries.filter((s) => Number(latestMarketStocks[s.key]?.changePercent) > 0);
+  }
+  if (filterType === 'losers') {
+    return entries.filter((s) => Number(latestMarketStocks[s.key]?.changePercent) < 0);
+  }
+  return entries;
+}
+
 function getSortedStockEntries(stocks) {
-  const entries = [...trackedStocks];
+  let entries = filterStockEntries([...trackedStocks], currentIndiaFilter, false);
 
   if (currentStockSort === 'changeAsc') {
     entries.sort((a, b) => {
@@ -226,6 +320,64 @@ function getSortedStockEntries(stocks) {
   return entries;
 }
 
+function getSortedUsStockEntries(stocks) {
+  let entries = filterStockEntries([...trackedUsStocks], currentUsFilter, true);
+
+  if (currentUsStockSort === 'changeAsc') {
+    entries.sort((a, b) => {
+      const aPct = Number(stocks[a.key]?.changePercent);
+      const bPct = Number(stocks[b.key]?.changePercent);
+      const aVal = Number.isFinite(aPct) ? aPct : Number.POSITIVE_INFINITY;
+      const bVal = Number.isFinite(bPct) ? bPct : Number.POSITIVE_INFINITY;
+      return aVal - bVal;
+    });
+    return entries;
+  }
+
+  if (currentUsStockSort === 'changeDesc') {
+    entries.sort((a, b) => {
+      const aPct = Number(stocks[a.key]?.changePercent);
+      const bPct = Number(stocks[b.key]?.changePercent);
+      const aVal = Number.isFinite(aPct) ? aPct : Number.NEGATIVE_INFINITY;
+      const bVal = Number.isFinite(bPct) ? bPct : Number.NEGATIVE_INFINITY;
+      return bVal - aVal;
+    });
+    return entries;
+  }
+
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  return entries;
+}
+
+function getStockPriceAlert(stockKey) {
+  return priceAlerts.find((alert) => alert.key === stockKey) || null;
+}
+
+function getAlertStatusMeta(currentPrice, threshold, type = 'buy') {
+  if (typeof currentPrice !== 'number') {
+    return { label: 'No live price', className: 'unknown' };
+  }
+
+  const isBuy = type === 'buy';
+  if (isBuy) {
+    if (currentPrice <= threshold) {
+      return { label: 'Target reached', className: 'met' };
+    }
+    if (currentPrice <= threshold * 1.02) {
+      return { label: 'Near target', className: 'near' };
+    }
+  } else {
+    if (currentPrice >= threshold) {
+      return { label: 'Target reached', className: 'met' };
+    }
+    if (currentPrice >= threshold * 0.98) {
+      return { label: 'Near target', className: 'near' };
+    }
+  }
+
+  return { label: 'Waiting', className: 'waiting' };
+}
+
 function upsertStockRow(stock) {
   let row = elements.stocksList.querySelector(`[data-stock="${stock.key}"]`);
 
@@ -234,19 +386,36 @@ function upsertStockRow(stock) {
     row.className = 'stock-row';
     row.dataset.stock = stock.key;
     row.innerHTML = `
-      <div class="stock-main">
-        <a class="stock-link" target="_blank" rel="noreferrer noopener">
-          <div class="stock-name-block">
-            <span class="stock-name"></span>
-            <span class="stock-symbol"></span>
-          </div>
-        </a>
+      <div class="stock-row-top">
+        <div class="stock-main">
+          <a class="stock-link" target="_blank" rel="noreferrer noopener">
+            <div class="stock-name-block">
+              <span class="stock-name"></span>
+              <span class="stock-symbol"></span>
+            </div>
+          </a>
+        </div>
+        <div class="stock-metrics">
+          <div class="price">--</div>
+          <div class="delta">--</div>
+        </div>
+        <button type="button" class="stock-remove-btn" aria-label="Remove stock" title="Remove stock">X</button>
       </div>
-      <div class="stock-metrics">
-        <div class="price">--</div>
-        <div class="delta">--</div>
+      <div class="stock-alert-section">
+        <button type="button" class="stock-alert-badge-btn" data-key="${stock.key}" title="Click to edit alert">
+          <span class="stock-alert-badge-label">+ Alert</span>
+        </button>
       </div>
-      <button type="button" class="stock-remove-btn" aria-label="Remove stock" title="Remove stock">X</button>
+      <div class="stock-alert-editor hidden" data-key="${stock.key}">
+        <select class="alert-type-select">
+          <option value="buy">Buy</option>
+          <option value="sell">Sell</option>
+        </select>
+        <input class="alert-threshold-input" type="number" min="0" step="0.01" placeholder="Target price" />
+        <button type="button" class="alert-save-btn">Save</button>
+        <button type="button" class="alert-reset-btn" title="Reset notification repeat state">Reset</button>
+        <button type="button" class="alert-clear-btn" title="Clear alert">Clear</button>
+      </div>
     `;
     elements.stocksList.appendChild(row);
   }
@@ -256,10 +425,51 @@ function upsertStockRow(stock) {
   row.querySelector('.stock-symbol').textContent = stock.symbol;
   row.querySelector('.stock-remove-btn').dataset.key = stock.key;
 
+  // Update Alert badge & editor state
+  const alert = getStockPriceAlert(stock.key);
+  const badgeBtn = row.querySelector('.stock-alert-badge-btn');
+  const badgeLabel = row.querySelector('.stock-alert-badge-label');
+  const editor = row.querySelector('.stock-alert-editor');
+  const livePrice = latestMarketStocks[stock.key]?.price;
+
+  badgeBtn.className = 'stock-alert-badge-btn';
+  if (alert) {
+    const type = alert.type || 'buy';
+    const status = getAlertStatusMeta(livePrice, alert.threshold, type);
+    badgeBtn.classList.add('has-alert', status.className);
+    badgeLabel.innerHTML = `
+      <span class="alert-type-chip ${type}">${type.toUpperCase()}</span>
+      <span>🎯 ₹${formatPrice(alert.threshold)}</span>
+      <span class="alert-status-text">(${status.label})</span>
+    `;
+    row.querySelector('.alert-type-select').value = type;
+    row.querySelector('.alert-threshold-input').value = Number(alert.threshold).toFixed(2);
+    row.querySelector('.alert-reset-btn').hidden = false;
+    row.querySelector('.alert-clear-btn').hidden = false;
+  } else {
+    badgeLabel.textContent = '+ Set Alert';
+    row.querySelector('.alert-type-select').value = 'buy';
+    if (!openAlertEditors.has(stock.key) && typeof livePrice === 'number') {
+      row.querySelector('.alert-threshold-input').value = Number(livePrice).toFixed(2);
+    }
+    row.querySelector('.alert-reset-btn').hidden = true;
+    row.querySelector('.alert-clear-btn').hidden = true;
+  }
+
+  if (openAlertEditors.has(stock.key)) {
+    editor.classList.remove('hidden');
+  } else {
+    editor.classList.add('hidden');
+  }
+
   return row;
 }
 
 function renderStocks(stocks) {
+  if (elements.indiaStockCountBadge) {
+    elements.indiaStockCountBadge.textContent = String(trackedStocks.length);
+  }
+
   const ordered = getSortedStockEntries(stocks);
   const activeKeys = new Set(ordered.map((stock) => stock.key));
 
@@ -287,90 +497,171 @@ function renderStocks(stocks) {
     emptyState.remove();
   }
 }
-
-
-function getAlertStatusMeta(currentPrice, threshold, type = 'buy') {
-  if (typeof currentPrice !== 'number') {
-    return { label: 'No live price', className: 'unknown' };
-  }
-
-  const isBuy = type === 'buy';
-  if (isBuy) {
-    if (currentPrice <= threshold) {
-      return { label: 'Target reached', className: 'met' };
-    }
-    if (currentPrice <= threshold * 1.02) {
-      return { label: 'Near target', className: 'near' };
-    }
-  } else {
-    if (currentPrice >= threshold) {
-      return { label: 'Target reached', className: 'met' };
-    }
-    if (currentPrice >= threshold * 0.98) {
-      return { label: 'Near target', className: 'near' };
-    }
-  }
-
-  return { label: 'Waiting', className: 'waiting' };
+function getUsStockPriceAlert(stockKey) {
+  return usPriceAlerts.find((alert) => alert.key === stockKey) || null;
 }
-function renderPriceAlerts(stocks) {
-  const ordered = [...priceAlerts].sort((a, b) => a.name.localeCompare(b.name));
-  elements.priceAlertsList.innerHTML = '';
 
-  if (ordered.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'alert-empty';
-    empty.textContent = 'No price alerts yet. Search a stock, set a price, and add an alert.';
-    elements.priceAlertsList.appendChild(empty);
-    return;
-  }
+function upsertUsStockRow(stock) {
+  let row = elements.usStocksList.querySelector(`[data-us-stock="${stock.key}"]`);
 
-  for (const alert of ordered) {
-    const current = stocks[alert.key]?.price;
-    const type = alert.type || 'buy';
-    const status = getAlertStatusMeta(current, alert.threshold, type);
-    const row = document.createElement('article');
-    row.className = 'alert-row';
-    row.dataset.alertId = alert.id;
+  if (!row) {
+    row = document.createElement('article');
+    row.className = 'stock-row';
+    row.dataset.usStock = stock.key;
     row.innerHTML = `
-      <div class="alert-main">
-        <div class="alert-name-block">
-          <span class="alert-name">${alert.name}</span>
-          <span class="alert-symbol">${alert.symbol}</span>
-          <span class="alert-current">Current: ${typeof current === 'number' ? formatPrice(current) : '--'}</span>
-          <span class="alert-type-chip ${type}">${type.toUpperCase()}</span>
-          <span class="alert-status-chip ${status.className}">${status.label}</span>
+      <div class="stock-row-top">
+        <div class="stock-main">
+          <a class="stock-link" target="_blank" rel="noreferrer noopener">
+            <div class="stock-name-block">
+              <span class="stock-name"></span>
+              <span class="stock-symbol"></span>
+            </div>
+          </a>
         </div>
+        <div class="stock-metrics">
+          <div class="price">--</div>
+          <div class="delta">--</div>
+        </div>
+        <button type="button" class="stock-remove-btn us-stock-remove-btn" aria-label="Remove US stock" title="Remove US stock">X</button>
       </div>
-      <div class="alert-controls">
-        <span class="alert-label">Target</span>
-        <input class="alert-threshold-input" type="number" min="0" step="0.01" value="${Number(alert.threshold).toFixed(2)}" />
-        <button type="button" class="alert-save-btn">Update</button>
-        <button type="button" class="alert-reset-btn">Reset</button>
-        <button type="button" class="alert-remove-btn" aria-label="Remove alert" title="Remove alert">X</button>
+      <div class="stock-alert-section">
+        <button type="button" class="stock-alert-badge-btn us-stock-alert-badge-btn" data-key="${stock.key}" title="Click to edit US alert">
+          <span class="stock-alert-badge-label">+ Alert</span>
+        </button>
+      </div>
+      <div class="stock-alert-editor us-stock-alert-editor hidden" data-key="${stock.key}">
+        <select class="alert-type-select">
+          <option value="buy">Buy</option>
+          <option value="sell">Sell</option>
+        </select>
+        <input class="alert-threshold-input" type="number" min="0" step="0.01" placeholder="Target USD" />
+        <button type="button" class="alert-save-btn us-alert-save-btn">Save</button>
+        <button type="button" class="alert-reset-btn us-alert-reset-btn" title="Reset notification repeat state">Reset</button>
+        <button type="button" class="alert-clear-btn us-alert-clear-btn" title="Clear alert">Clear</button>
       </div>
     `;
-    elements.priceAlertsList.appendChild(row);
+    elements.usStocksList.appendChild(row);
+  }
+
+  row.querySelector('.stock-link').href = getTradingViewStockUrl(stock.symbol);
+  row.querySelector('.stock-name').textContent = stock.name;
+  row.querySelector('.stock-symbol').textContent = stock.symbol;
+  row.querySelector('.us-stock-remove-btn').dataset.key = stock.key;
+
+  // Update US Alert badge & editor state
+  const alert = getUsStockPriceAlert(stock.key);
+  const badgeBtn = row.querySelector('.us-stock-alert-badge-btn');
+  const badgeLabel = row.querySelector('.stock-alert-badge-label');
+  const editor = row.querySelector('.us-stock-alert-editor');
+  const livePrice = latestMarketStocks[stock.key]?.price;
+
+  badgeBtn.className = 'stock-alert-badge-btn us-stock-alert-badge-btn';
+  if (alert) {
+    const type = alert.type || 'buy';
+    const status = getAlertStatusMeta(livePrice, alert.threshold, type);
+    badgeBtn.classList.add('has-alert', status.className);
+    badgeLabel.innerHTML = `
+      <span class="alert-type-chip ${type}">${type.toUpperCase()}</span>
+      <span>🎯 $${formatPrice(alert.threshold)}</span>
+      <span class="alert-status-text">(${status.label})</span>
+    `;
+    row.querySelector('.alert-type-select').value = type;
+    row.querySelector('.alert-threshold-input').value = Number(alert.threshold).toFixed(2);
+    row.querySelector('.us-alert-reset-btn').hidden = false;
+    row.querySelector('.us-alert-clear-btn').hidden = false;
+  } else {
+    badgeLabel.textContent = '+ Set Alert';
+    row.querySelector('.alert-type-select').value = 'buy';
+    if (!openUsAlertEditors.has(stock.key) && typeof livePrice === 'number') {
+      row.querySelector('.alert-threshold-input').value = Number(livePrice).toFixed(2);
+    }
+    row.querySelector('.us-alert-reset-btn').hidden = true;
+    row.querySelector('.us-alert-clear-btn').hidden = true;
+  }
+
+  if (openUsAlertEditors.has(stock.key)) {
+    editor.classList.remove('hidden');
+  } else {
+    editor.classList.add('hidden');
+  }
+
+  return row;
+}
+
+function renderUsStocks(stocks) {
+  if (elements.usStockCountBadge) {
+    elements.usStockCountBadge.textContent = String(trackedUsStocks.length);
+  }
+
+  if (!elements.usStocksList) return;
+  const ordered = getSortedUsStockEntries(stocks);
+  const activeKeys = new Set(ordered.map((stock) => stock.key));
+
+  for (const row of Array.from(elements.usStocksList.querySelectorAll('.stock-row'))) {
+    if (!activeKeys.has(row.dataset.usStock)) {
+      row.remove();
+    }
+  }
+
+  for (const stock of ordered) {
+    const row = upsertUsStockRow(stock);
+    renderIndex(`us-stock-${stock.key}`, row.querySelector('.price'), row.querySelector('.delta'), stocks[stock.key]);
+    elements.usStocksList.appendChild(row);
+  }
+
+  let emptyState = elements.usStocksList.querySelector('.stock-empty');
+  if (trackedUsStocks.length === 0) {
+    if (!emptyState) {
+      emptyState = document.createElement('div');
+      emptyState.className = 'stock-empty';
+      emptyState.textContent = 'No tracked US stocks yet. Search below to add one.';
+      elements.usStocksList.appendChild(emptyState);
+    }
+  } else if (emptyState) {
+    emptyState.remove();
   }
 }
 
 function renderStatus(lastUpdatedAt, lastError) {
-  if (lastError) {
-    elements.statusText.textContent = `Error: ${lastError}`;
+  if (lastUpdatedAt !== undefined) {
+    lastUpdatedTimestamp = lastUpdatedAt;
+  }
+  if (lastError !== undefined) {
+    lastErrorState = lastError;
+  }
+
+  if (lastErrorState) {
+    elements.statusText.textContent = `Error: ${lastErrorState}`;
     return;
   }
 
-  if (!lastUpdatedAt) {
+  if (!lastUpdatedTimestamp) {
     elements.statusText.textContent = 'No data yet';
     return;
   }
 
-  const time = new Date(lastUpdatedAt);
-  elements.statusText.textContent = `Updated at ${time.toLocaleTimeString('en-IN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  })}`;
+  const time = new Date(lastUpdatedTimestamp);
+  const isUsContext = currentActiveTab === 'global' || (currentActiveTab === 'stocks' && currentInnerActiveTab === 'us-tracker');
+
+  if (isUsContext) {
+    const formatted = time.toLocaleTimeString('en-US', {
+      timeZone: US_TIMEZONE,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    });
+    elements.statusText.textContent = `Updated at ${formatted} ET`;
+  } else {
+    const formatted = time.toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    });
+    elements.statusText.textContent = `Updated at ${formatted} IST`;
+  }
 }
 
 function getIstDateParts(now = new Date()) {
@@ -389,6 +680,41 @@ function getIstDateParts(now = new Date()) {
     dateKey: `${year}-${monthText}-${dayText}`,
     weekday: ist.getUTCDay(),
     minutesSinceMidnight: ist.getUTCHours() * 60 + ist.getUTCMinutes()
+  };
+}
+
+function getZonedDateParts(timeZone) {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    weekday: 'short',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  });
+
+  const parts = formatter.formatToParts(new Date());
+  const map = {};
+  for (const part of parts) {
+    if (part.type !== 'literal') {
+      map[part.type] = part.value;
+    }
+  }
+
+  const weekday = WEEKDAY_MAP[map.weekday] ?? 0;
+  const hour = Number(map.hour || 0);
+  const minute = Number(map.minute || 0);
+  const dateKey = `${map.year}-${map.month}-${map.day}`;
+
+  return {
+    year: Number(map.year),
+    month: Number(map.month) - 1,
+    day: Number(map.day),
+    weekday,
+    minutesSinceMidnight: hour * 60 + minute,
+    dateKey
   };
 }
 
@@ -430,6 +756,32 @@ function getNextTradingDayParts(parts) {
   return parts;
 }
 
+function getNextUsTradingDayParts(parts) {
+  let cursor = new Date(Date.UTC(parts.year, parts.month, parts.day, 12, 0, 0));
+
+  for (let i = 0; i < 15; i += 1) {
+    cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
+    const y = cursor.getUTCFullYear();
+    const m = String(cursor.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(cursor.getUTCDate()).padStart(2, '0');
+    const dateKey = `${y}-${m}-${d}`;
+    const weekday = cursor.getUTCDay();
+
+    if (!isWeekend(weekday) && !isUsHoliday(dateKey)) {
+      return {
+        year: cursor.getUTCFullYear(),
+        month: cursor.getUTCMonth(),
+        day: cursor.getUTCDate(),
+        dateKey,
+        weekday,
+        minutesSinceMidnight: 0
+      };
+    }
+  }
+
+  return parts;
+}
+
 function formatDuration(ms) {
   const clamped = Math.max(0, Math.floor(ms / 1000));
   const days = Math.floor(clamped / 86400);
@@ -448,8 +800,17 @@ function formatDuration(ms) {
 }
 
 function setNextEvent(label, timer) {
-  elements.nextEventLabel.textContent = label;
-  elements.nextEventTimer.textContent = timer;
+  if (elements.nextEventLabel && elements.nextEventTimer) {
+    elements.nextEventLabel.textContent = label;
+    elements.nextEventTimer.textContent = timer;
+  }
+}
+
+function setUsNextEvent(label, timer) {
+  if (elements.usNextEventLabel && elements.usNextEventTimer) {
+    elements.usNextEventLabel.textContent = label;
+    elements.usNextEventTimer.textContent = timer;
+  }
 }
 
 function formatNextOpenLabel(nextTradingDay, currentParts) {
@@ -463,7 +824,94 @@ function formatNextOpenLabel(nextTradingDay, currentParts) {
   return `Next Open (${dayName}, ${day}/${month} 9:15 AM)`;
 }
 
+function formatNextUsOpenLabel(nextTradingDay, currentParts) {
+  if (nextTradingDay.dateKey === currentParts.dateKey) {
+    return 'Next Open (9:30 AM ET)';
+  }
+
+  const dayName = WEEKDAY_SHORT[nextTradingDay.weekday] || 'Next';
+  const day = String(nextTradingDay.day).padStart(2, '0');
+  const month = String(nextTradingDay.month + 1).padStart(2, '0');
+  return `Next Open (${dayName}, ${month}/${day} 9:30 AM ET)`;
+}
+
+function updateHeaderMarketStatus() {
+  const istParts = getIstDateParts();
+  const isIndiaHoliday = Boolean(getNseHolidayName(istParts.dateKey));
+  const isIndiaWknd = isWeekend(istParts.weekday);
+  const isIndiaOpen = !isIndiaHoliday && !isIndiaWknd && istParts.minutesSinceMidnight >= MARKET_OPEN_MINUTES && istParts.minutesSinceMidnight < MARKET_CLOSE_MINUTES;
+
+  if (elements.indiaMarketStatus) {
+    elements.indiaMarketStatus.className = `market-pill ${isIndiaOpen ? 'open' : 'closed'}`;
+    elements.indiaMarketStatus.textContent = isIndiaOpen ? 'India Open' : 'India Closed';
+  }
+
+  const us = getZonedDateParts(US_TIMEZONE);
+  const isUsHoli = isUsHoliday(us.dateKey);
+  const usWknd = isWeekend(us.weekday);
+  const isUsOpen = !isUsHoli && !usWknd && us.minutesSinceMidnight >= US_OPEN_MINUTES && us.minutesSinceMidnight < US_CLOSE_MINUTES;
+
+  if (elements.usMarketStatus) {
+    elements.usMarketStatus.className = `market-pill ${isUsOpen ? 'open' : 'closed'}`;
+    elements.usMarketStatus.textContent = isUsOpen ? 'US Open' : 'US Closed';
+  }
+}
+
+function updateUsMarketTimers() {
+  if (!elements.usMarketPhase) return;
+  const us = getZonedDateParts(US_TIMEZONE);
+  const holidayName = US_HOLIDAYS[us.dateKey];
+
+  // Calculate remaining ms until a given target minute in ET
+  const getUsTargetMs = (targetParts, targetMinutes) => {
+    // Current time in ET vs target time in ET today or target day
+    const msSinceMidnight = (us.minutesSinceMidnight * 60 + (new Date().getSeconds())) * 1000;
+    if (targetParts.dateKey === us.dateKey) {
+      return targetMinutes * 60 * 1000 - msSinceMidnight;
+    }
+    // Days diff
+    const [y1, m1, d1] = us.dateKey.split('-').map(Number);
+    const [y2, m2, d2] = targetParts.dateKey.split('-').map(Number);
+    const dt1 = Date.UTC(y1, m1 - 1, d1);
+    const dt2 = Date.UTC(y2, m2 - 1, d2);
+    const diffDays = Math.max(1, Math.round((dt2 - dt1) / (24 * 60 * 60 * 1000)));
+    return diffDays * 24 * 60 * 60 * 1000 + (targetMinutes * 60 * 1000) - msSinceMidnight;
+  };
+
+  if (holidayName) {
+    const nextTradingDay = getNextUsTradingDayParts(us);
+    setUsNextEvent(formatNextUsOpenLabel(nextTradingDay, us), formatDuration(getUsTargetMs(nextTradingDay, US_OPEN_MINUTES)));
+    elements.usMarketPhase.textContent = `US Holiday (${holidayName})`;
+    return;
+  }
+
+  if (isWeekend(us.weekday)) {
+    const nextTradingDay = getNextUsTradingDayParts(us);
+    setUsNextEvent(formatNextUsOpenLabel(nextTradingDay, us), formatDuration(getUsTargetMs(nextTradingDay, US_OPEN_MINUTES)));
+    elements.usMarketPhase.textContent = 'Weekend Closed';
+    return;
+  }
+
+  if (us.minutesSinceMidnight < US_OPEN_MINUTES) {
+    elements.usMarketPhase.textContent = 'Pre-Market / Closed';
+    setUsNextEvent('Market Open (9:30 AM ET)', formatDuration(getUsTargetMs(us, US_OPEN_MINUTES)));
+    return;
+  }
+
+  if (us.minutesSinceMidnight < US_CLOSE_MINUTES) {
+    elements.usMarketPhase.textContent = 'Regular Trading Hours';
+    setUsNextEvent('Market Close (4:00 PM ET)', formatDuration(getUsTargetMs(us, US_CLOSE_MINUTES)));
+    return;
+  }
+
+  const nextTradingDay = getNextUsTradingDayParts(us);
+  elements.usMarketPhase.textContent = 'Market Closed';
+  setUsNextEvent(formatNextUsOpenLabel(nextTradingDay, us), formatDuration(getUsTargetMs(nextTradingDay, US_OPEN_MINUTES)));
+}
+
 function updateMarketTimers() {
+  updateHeaderMarketStatus();
+  updateUsMarketTimers();
   const now = Date.now();
   const parts = getIstDateParts();
   const holidayName = getNseHolidayName(parts.dateKey);
@@ -506,6 +954,7 @@ function updateMarketTimers() {
 }
 
 function switchTab(tab) {
+  currentActiveTab = tab;
   for (const button of tabButtons) {
     button.classList.toggle('active', button.dataset.tab === tab);
   }
@@ -513,17 +962,23 @@ function switchTab(tab) {
   for (const [name, panel] of Object.entries(tabPanels)) {
     panel.classList.toggle('active', name === tab);
   }
+
+  renderStatus();
 }
 
 function renderSearchResults(results, container, mode) {
   const isAlertMode = mode === 'alert';
+  const isUsMode = mode === 'us-stock';
   if (isAlertMode) {
     alertSearchResultsState = results;
+  } else if (isUsMode) {
+    usStockSearchResultsState = results;
   } else {
     stockSearchResultsState = results;
   }
 
-  const duplicateKeys = new Set((isAlertMode ? priceAlerts : trackedStocks).map((item) => item.key));
+  const listToCompare = isAlertMode ? priceAlerts : isUsMode ? trackedUsStocks : trackedStocks;
+  const duplicateKeys = new Set(listToCompare.map((item) => item.key));
   if (!results.length) {
     container.hidden = true;
     container.innerHTML = '';
@@ -557,6 +1012,8 @@ function renderSearchResults(results, container, mode) {
 function renderSearchState(container, message, mode) {
   if (mode === 'alert') {
     alertSearchResultsState = [];
+  } else if (mode === 'us-stock') {
+    usStockSearchResultsState = [];
   } else {
     stockSearchResultsState = [];
   }
@@ -567,6 +1024,8 @@ function renderSearchState(container, message, mode) {
 function clearSearchResults(container, mode) {
   if (mode === 'alert') {
     alertSearchResultsState = [];
+  } else if (mode === 'us-stock') {
+    usStockSearchResultsState = [];
   } else {
     stockSearchResultsState = [];
   }
@@ -576,6 +1035,7 @@ function clearSearchResults(container, mode) {
 
 
 function switchInnerTab(tab) {
+  currentInnerActiveTab = tab;
   for (const button of innerTabButtons) {
     button.classList.toggle('active', button.dataset.innerTab === tab);
   }
@@ -583,17 +1043,27 @@ function switchInnerTab(tab) {
   for (const [name, panel] of Object.entries(innerTabPanels)) {
     panel.classList.toggle('active', name === tab);
   }
+
+  renderStatus();
 }
 async function loadTrackedStocks() {
   const data = await chrome.storage.local.get([TRACKED_STOCKS_KEY]);
   trackedStocks = Array.isArray(data[TRACKED_STOCKS_KEY]) ? data[TRACKED_STOCKS_KEY] : cloneList(DEFAULT_TRACKED_STOCKS);
 }
 
+async function loadTrackedUsStocks() {
+  const data = await chrome.storage.local.get([TRACKED_US_STOCKS_KEY]);
+  trackedUsStocks = Array.isArray(data[TRACKED_US_STOCKS_KEY]) ? data[TRACKED_US_STOCKS_KEY] : cloneList(DEFAULT_TRACKED_US_STOCKS);
+}
+
 async function loadPriceAlerts() {
   const data = await chrome.storage.local.get([PRICE_ALERTS_KEY]);
-  console.log('loadPriceAlerts raw data from storage:', data[PRICE_ALERTS_KEY]);
   priceAlerts = dedupePriceAlerts(Array.isArray(data[PRICE_ALERTS_KEY]) ? data[PRICE_ALERTS_KEY] : []);
-  console.log('loadPriceAlerts deduped alerts in popup:', priceAlerts);
+}
+
+async function loadUsPriceAlerts() {
+  const data = await chrome.storage.local.get([US_PRICE_ALERTS_KEY]);
+  usPriceAlerts = dedupePriceAlerts(Array.isArray(data[US_PRICE_ALERTS_KEY]) ? data[US_PRICE_ALERTS_KEY] : []);
 }
 
 async function loadData() {
@@ -614,8 +1084,8 @@ async function loadData() {
   renderIndex('ftse100', elements.ftse100Price, elements.ftse100Delta, global.ftse100);
   renderIndex('nikkei225', elements.nikkei225Price, elements.nikkei225Delta, global.nikkei225);
 
-  renderPriceAlerts(stocks);
   renderStocks(stocks);
+  renderUsStocks(stocks);
   renderStatus(data[LAST_UPDATED_KEY], data.lastError);
 }
 
@@ -667,6 +1137,7 @@ async function refreshNow(options = {}) {
     }
     refreshInFlight = false;
     await loadTrackedStocks();
+    await loadTrackedUsStocks();
     await loadPriceAlerts();
     await loadData();
   }
@@ -674,10 +1145,10 @@ async function refreshNow(options = {}) {
 
 async function runSearch(query, mode) {
   const trimmed = String(query || '').trim();
-  const container = mode === 'alert' ? elements.alertSearchResults : elements.stockSearchResults;
-  const requestId = mode === 'alert' ? ++alertSearchRequestId : ++searchRequestId;
+  const container = mode === 'us-stock' ? elements.usStockSearchResults : elements.stockSearchResults;
+  const requestId = mode === 'us-stock' ? ++usSearchRequestId : ++searchRequestId;
 
-  if (trimmed.length < 2) {
+  if (trimmed.length < (mode === 'us-stock' ? 1 : 2)) {
     clearSearchResults(container, mode);
     return;
   }
@@ -685,8 +1156,9 @@ async function runSearch(query, mode) {
   renderSearchState(container, 'Searching...', mode);
 
   try {
-    const response = await chrome.runtime.sendMessage({ type: 'search-stocks', query: trimmed });
-    const latestId = mode === 'alert' ? alertSearchRequestId : searchRequestId;
+    const msgType = mode === 'us-stock' ? 'search-us-stocks' : 'search-stocks';
+    const response = await chrome.runtime.sendMessage({ type: msgType, query: trimmed });
+    const latestId = mode === 'us-stock' ? usSearchRequestId : searchRequestId;
     if (requestId !== latestId) {
       return;
     }
@@ -697,13 +1169,13 @@ async function runSearch(query, mode) {
 
     const results = response.results || [];
     if (results.length === 0) {
-      renderSearchState(container, 'No NSE stocks found', mode);
+      renderSearchState(container, mode === 'us-stock' ? 'No US stocks found' : 'No NSE stocks found', mode);
       return;
     }
 
     renderSearchResults(results, container, mode);
   } catch (error) {
-    const latestId = mode === 'alert' ? alertSearchRequestId : searchRequestId;
+    const latestId = mode === 'us-stock' ? usSearchRequestId : searchRequestId;
     if (requestId !== latestId) {
       return;
     }
@@ -719,6 +1191,16 @@ async function addTrackedStock(stock) {
 
   elements.stockSearchInput.value = '';
   clearSearchResults(elements.stockSearchResults, 'stock');
+}
+
+async function addTrackedUsStock(stock) {
+  const response = await chrome.runtime.sendMessage({ type: 'add-us-stock', stock });
+  if (!response?.ok) {
+    throw new Error(response?.error || 'Failed to add US stock');
+  }
+
+  elements.usStockSearchInput.value = '';
+  clearSearchResults(elements.usStockSearchResults, 'us-stock');
 }
 
 async function removeTrackedStock(key) {
@@ -737,6 +1219,21 @@ async function removeTrackedStock(key) {
   }
 }
 
+async function removeTrackedUsStock(key) {
+  const stock = getTrackedUsStockByKey(key);
+  if (!stock) {
+    return;
+  }
+
+  if (!window.confirm(`Remove ${stock.name} from US Stock Tracker?`)) {
+    return;
+  }
+
+  const response = await chrome.runtime.sendMessage({ type: 'remove-us-stock', key });
+  if (!response?.ok) {
+    throw new Error(response?.error || 'Failed to remove US stock');
+  }
+}
 
 function showPriceAlertSavedDialog(alert) {
   const currentPrice = latestMarketStocks[alert.key]?.price;
@@ -753,6 +1250,7 @@ function showPriceAlertSavedDialog(alert) {
 
   window.alert(lines.join('\n'));
 }
+
 async function upsertPriceAlert(alert) {
   const response = await chrome.runtime.sendMessage({ type: 'upsert-price-alert', alert });
   if (!response?.ok) {
@@ -763,10 +1261,6 @@ async function upsertPriceAlert(alert) {
 async function removePriceAlert(id) {
   const alert = getPriceAlertById(id);
   if (!alert) {
-    return;
-  }
-
-  if (!window.confirm(`Remove price alert for ${alert.name}?`)) {
     return;
   }
 
@@ -783,6 +1277,32 @@ async function resetPriceAlert(id) {
   }
 }
 
+async function upsertUsPriceAlert(alert) {
+  const response = await chrome.runtime.sendMessage({ type: 'upsert-us-price-alert', alert });
+  if (!response?.ok) {
+    throw new Error(response?.error || 'Failed to save US alert');
+  }
+}
+
+async function removeUsPriceAlert(id) {
+  const alert = getPriceAlertById(id) || usPriceAlerts.find((a) => a.id === id);
+  if (!alert) {
+    return;
+  }
+
+  const response = await chrome.runtime.sendMessage({ type: 'remove-us-price-alert', id });
+  if (!response?.ok) {
+    throw new Error(response?.error || 'Failed to remove US alert');
+  }
+}
+
+async function resetUsPriceAlert(id) {
+  const response = await chrome.runtime.sendMessage({ type: 'reset-us-price-alert', id });
+  if (!response?.ok) {
+    throw new Error(response?.error || 'Failed to reset US alert');
+  }
+}
+
 async function syncApiPriceAlerts() {
   const btn = elements.syncApiAlertsBtn;
   const originalText = btn.textContent;
@@ -796,8 +1316,35 @@ async function syncApiPriceAlerts() {
     }
 
     elements.statusText.textContent = `Synced ${response.count || 0} API alerts.`;
+    await loadTrackedStocks();
     await loadPriceAlerts();
-    renderPriceAlerts(latestMarketStocks);
+    renderStocks(latestMarketStocks);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+async function syncUsApiPriceAlerts() {
+  const btn = elements.syncUsApiAlertsBtn;
+  if (!btn) {
+    return;
+  }
+
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Syncing...';
+
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'sync-us-price-alerts-api' });
+    if (!response?.ok) {
+      throw new Error(response?.error || 'Failed to sync US API alerts');
+    }
+
+    elements.statusText.textContent = `Synced ${response.count || 0} US API alerts.`;
+    await loadTrackedUsStocks();
+    await loadUsPriceAlerts();
+    renderUsStocks(latestMarketStocks);
   } finally {
     btn.disabled = false;
     btn.textContent = originalText;
@@ -809,14 +1356,16 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
     return;
   }
 
-  if (changes[TRACKED_STOCKS_KEY]) {
+  if (changes[TRACKED_STOCKS_KEY] || changes[PRICE_ALERTS_KEY]) {
     await loadTrackedStocks();
+    await loadPriceAlerts();
     renderStocks(latestMarketStocks);
   }
 
-  if (changes[PRICE_ALERTS_KEY]) {
-    await loadPriceAlerts();
-    renderPriceAlerts(latestMarketStocks);
+  if (changes[TRACKED_US_STOCKS_KEY] || changes[US_PRICE_ALERTS_KEY]) {
+    await loadTrackedUsStocks();
+    await loadUsPriceAlerts();
+    renderUsStocks(latestMarketStocks);
   }
 
   if (changes[STORAGE_KEY] || changes[LAST_UPDATED_KEY] || changes.lastError) {
@@ -856,16 +1405,72 @@ elements.stockSort.addEventListener('change', () => {
   renderStocks(latestMarketStocks);
 });
 
+if (elements.usStockSort) {
+  elements.usStockSort.addEventListener('change', () => {
+    currentUsStockSort = elements.usStockSort.value;
+    renderUsStocks(latestMarketStocks);
+  });
+}
+
+// India Quick Filter Chips
+if (elements.indiaStockFilters) {
+  elements.indiaStockFilters.addEventListener('click', (e) => {
+    const chip = e.target.closest('.filter-chip');
+    if (!chip) return;
+    elements.indiaStockFilters.querySelectorAll('.filter-chip').forEach((c) => c.classList.remove('active'));
+    chip.classList.add('active');
+    currentIndiaFilter = chip.dataset.filter;
+    renderStocks(latestMarketStocks);
+  });
+}
+
+// US Quick Filter Chips
+if (elements.usStockFilters) {
+  elements.usStockFilters.addEventListener('click', (e) => {
+    const chip = e.target.closest('.filter-chip');
+    if (!chip) return;
+    elements.usStockFilters.querySelectorAll('.filter-chip').forEach((c) => c.classList.remove('active'));
+    chip.classList.add('active');
+    currentUsFilter = chip.dataset.filter;
+    renderUsStocks(latestMarketStocks);
+  });
+}
+
 elements.stockSearchInput.addEventListener('input', () => {
+  if (elements.clearStockSearchBtn) {
+    elements.clearStockSearchBtn.classList.toggle('hidden', !elements.stockSearchInput.value.trim());
+  }
   clearTimeout(searchDebounceTimer);
   searchDebounceTimer = setTimeout(() => runSearch(elements.stockSearchInput.value, 'stock'), 250);
 });
 
-elements.alertStockSearchInput.addEventListener('input', () => {
-  selectedAlertStock = null;
-  clearTimeout(alertSearchDebounceTimer);
-  alertSearchDebounceTimer = setTimeout(() => runSearch(elements.alertStockSearchInput.value, 'alert'), 250);
-});
+if (elements.clearStockSearchBtn) {
+  elements.clearStockSearchBtn.addEventListener('click', () => {
+    elements.stockSearchInput.value = '';
+    elements.clearStockSearchBtn.classList.add('hidden');
+    clearSearchResults(elements.stockSearchResults, 'stock');
+    elements.stockSearchInput.focus();
+  });
+}
+
+if (elements.usStockSearchInput) {
+  elements.usStockSearchInput.addEventListener('input', () => {
+    if (elements.clearUsStockSearchBtn) {
+      elements.clearUsStockSearchBtn.classList.toggle('hidden', !elements.usStockSearchInput.value.trim());
+    }
+    clearTimeout(usSearchDebounceTimer);
+    usSearchDebounceTimer = setTimeout(() => runSearch(elements.usStockSearchInput.value, 'us-stock'), 250);
+  });
+}
+
+if (elements.clearUsStockSearchBtn) {
+  elements.clearUsStockSearchBtn.addEventListener('click', () => {
+    elements.usStockSearchInput.value = '';
+    elements.clearUsStockSearchBtn.classList.add('hidden');
+    clearSearchResults(elements.usStockSearchResults, 'us-stock');
+    elements.usStockSearchInput.focus();
+  });
+}
 
 elements.stockSearchResults.addEventListener('click', async (event) => {
   const button = event.target.closest('.stock-search-item');
@@ -884,125 +1489,256 @@ elements.stockSearchResults.addEventListener('click', async (event) => {
   }
 });
 
-elements.alertSearchResults.addEventListener('click', (event) => {
-  const button = event.target.closest('.stock-search-item');
-  if (!button) {
-    return;
-  }
+if (elements.usStockSearchResults) {
+  elements.usStockSearchResults.addEventListener('click', async (event) => {
+    const button = event.target.closest('.stock-search-item');
+    if (!button || button.disabled) {
+      return;
+    }
 
-  selectedAlertStock = {
-    key: button.dataset.key,
-    symbol: button.dataset.symbol,
-    name: button.dataset.name,
-    displaySymbol: button.dataset.displaySymbol
-  };
-  elements.alertStockSearchInput.value = `${selectedAlertStock.displaySymbol} - ${selectedAlertStock.name}`;
-  clearSearchResults(elements.alertSearchResults, 'alert');
-});
-
-function resolveAlertSelection() {
-  if (selectedAlertStock) {
-    return selectedAlertStock;
-  }
-
-  const typed = String(elements.alertStockSearchInput.value || '').trim().toUpperCase();
-  if (!typed) {
-    return null;
-  }
-
-  const fromResults = alertSearchResultsState.find((item) => {
-    const display = String(item.displaySymbol || '').toUpperCase();
-    const symbol = String(item.symbol || '').toUpperCase();
-    const name = String(item.name || '').toUpperCase();
-    return typed === display || typed === symbol || typed.includes(display) || typed.includes(name);
-  });
-
-  if (fromResults) {
-    return fromResults;
-  }
-
-  return alertSearchResultsState[0] || null;
-}
-elements.addAlertBtn.addEventListener('click', async () => {
-  const threshold = Number(elements.alertThresholdInput.value);
-  const alertStock = resolveAlertSelection();
-  const type = elements.alertTypeSelect.value || 'buy';
-  if (!alertStock) {
-    elements.statusText.textContent = 'Search a stock and pick a match for the alert.';
-    return;
-  }
-  selectedAlertStock = alertStock;
-  if (!Number.isFinite(threshold) || threshold <= 0) {
-    elements.statusText.textContent = 'Enter a valid alert price.';
-    return;
-  }
-
-  try {
-    await upsertPriceAlert({
-      key: alertStock.key,
-      symbol: alertStock.symbol,
-      name: alertStock.name,
-      threshold,
-      type
-    });
-    elements.alertStockSearchInput.value = '';
-    elements.alertThresholdInput.value = '';
-    selectedAlertStock = null;
-    clearSearchResults(elements.alertSearchResults, 'alert');
-    showPriceAlertSavedDialog({
-      key: alertStock.key,
-      name: alertStock.name,
-      threshold,
-      type
-    });
-  } catch (error) {
-    elements.statusText.textContent = `Error: ${error?.message || 'Failed to save alert'}`;
-  }
-});
-
-elements.priceAlertsList.addEventListener('click', async (event) => {
-  const removeBtn = event.target.closest('.alert-remove-btn');
-  if (removeBtn) {
     try {
-      await removePriceAlert(removeBtn.closest('.alert-row').dataset.alertId);
+      await addTrackedUsStock({
+        key: button.dataset.key,
+        symbol: button.dataset.symbol,
+        name: button.dataset.name
+      });
     } catch (error) {
-      elements.statusText.textContent = `Error: ${error?.message || 'Failed to remove alert'}`;
+      elements.statusText.textContent = `Error: ${error?.message || 'Failed to add US stock'}`;
+    }
+  });
+}
+
+elements.stocksList.addEventListener('click', async (event) => {
+  const row = event.target.closest('.stock-row');
+  if (!row) {
+    return;
+  }
+
+  const stockKey = row.dataset.stock;
+  const stock = getTrackedStockByKey(stockKey);
+  if (!stock) {
+    return;
+  }
+
+  // Remove stock
+  const removeButton = event.target.closest('.stock-remove-btn');
+  if (removeButton) {
+    try {
+      await removeTrackedStock(removeButton.dataset.key);
+      const alert = getStockPriceAlert(stockKey);
+      if (alert) {
+        await removePriceAlert(alert.id);
+      }
+    } catch (error) {
+      elements.statusText.textContent = `Error: ${error?.message || 'Failed to remove stock'}`;
     }
     return;
   }
 
+  // Toggle Alert Editor
+  const badgeBtn = event.target.closest('.stock-alert-badge-btn');
+  if (badgeBtn) {
+    if (openAlertEditors.has(stockKey)) {
+      openAlertEditors.delete(stockKey);
+    } else {
+      openAlertEditors.add(stockKey);
+    }
+    renderStocks(latestMarketStocks);
+    return;
+  }
+
+  // Save Alert
   const saveBtn = event.target.closest('.alert-save-btn');
   if (saveBtn) {
-    const row = saveBtn.closest('.alert-row');
-    const alert = getPriceAlertById(row.dataset.alertId);
-    const threshold = Number(row.querySelector('.alert-threshold-input').value);
-    if (!alert) {
-      return;
-    }
+    const thresholdInput = row.querySelector('.alert-threshold-input');
+    const typeSelect = row.querySelector('.alert-type-select');
+    const threshold = Number(thresholdInput.value);
+    const type = typeSelect.value || 'buy';
 
     if (!Number.isFinite(threshold) || threshold <= 0) {
-      elements.statusText.textContent = 'Enter a valid alert price.';
+      elements.statusText.textContent = 'Enter a valid target price.';
       return;
     }
 
     try {
-      await upsertPriceAlert({ ...alert, threshold });
-      showPriceAlertSavedDialog({ ...alert, threshold });
+      await upsertPriceAlert({
+        key: stock.key,
+        symbol: stock.symbol,
+        name: stock.name,
+        threshold,
+        type
+      });
+      openAlertEditors.delete(stockKey);
+      await loadPriceAlerts();
+      renderStocks(latestMarketStocks);
+      showPriceAlertSavedDialog({
+        key: stock.key,
+        name: stock.name,
+        threshold,
+        type
+      });
     } catch (error) {
       elements.statusText.textContent = `Error: ${error?.message || 'Failed to save alert'}`;
     }
     return;
   }
 
+  // Reset Alert
   const resetBtn = event.target.closest('.alert-reset-btn');
   if (resetBtn) {
-    const row = resetBtn.closest('.alert-row');
-    try {
-      await resetPriceAlert(row.dataset.alertId);
-      elements.statusText.textContent = 'Alert reset. It will notify again on the next matching check.';
-    } catch (error) {
-      elements.statusText.textContent = `Error: ${error?.message || 'Failed to reset alert'}`;
+    const alert = getStockPriceAlert(stockKey);
+    if (alert) {
+      try {
+        await resetPriceAlert(alert.id);
+        elements.statusText.textContent = `${stock.name} alert reset.`;
+        openAlertEditors.delete(stockKey);
+        renderStocks(latestMarketStocks);
+      } catch (error) {
+        elements.statusText.textContent = `Error: ${error?.message || 'Failed to reset alert'}`;
+      }
     }
+    return;
+  }
+
+  // Clear Alert
+  const clearBtn = event.target.closest('.alert-clear-btn');
+  if (clearBtn) {
+    const alert = getStockPriceAlert(stockKey);
+    if (alert) {
+      try {
+        await removePriceAlert(alert.id);
+        elements.statusText.textContent = `${stock.name} alert cleared.`;
+        openAlertEditors.delete(stockKey);
+        await loadPriceAlerts();
+        renderStocks(latestMarketStocks);
+      } catch (error) {
+        elements.statusText.textContent = `Error: ${error?.message || 'Failed to clear alert'}`;
+      }
+    }
+    return;
+  }
+});
+
+if (elements.usStocksList) {
+  elements.usStocksList.addEventListener('click', async (event) => {
+    const row = event.target.closest('.stock-row');
+    if (!row) {
+      return;
+    }
+
+    const stockKey = row.dataset.usStock;
+    const stock = getTrackedUsStockByKey(stockKey);
+    if (!stock) {
+      return;
+    }
+
+    // Remove stock
+    const removeButton = event.target.closest('.us-stock-remove-btn');
+    if (removeButton) {
+      try {
+        await removeTrackedUsStock(removeButton.dataset.key);
+        const alert = getUsStockPriceAlert(stockKey);
+        if (alert) {
+          await removeUsPriceAlert(alert.id);
+        }
+      } catch (error) {
+        elements.statusText.textContent = `Error: ${error?.message || 'Failed to remove US stock'}`;
+      }
+      return;
+    }
+
+    // Toggle US Alert Editor
+    const badgeBtn = event.target.closest('.us-stock-alert-badge-btn');
+    if (badgeBtn) {
+      if (openUsAlertEditors.has(stockKey)) {
+        openUsAlertEditors.delete(stockKey);
+      } else {
+        openUsAlertEditors.add(stockKey);
+      }
+      renderUsStocks(latestMarketStocks);
+      return;
+    }
+
+    // Save US Alert
+    const saveBtn = event.target.closest('.us-alert-save-btn');
+    if (saveBtn) {
+      const thresholdInput = row.querySelector('.alert-threshold-input');
+      const typeSelect = row.querySelector('.alert-type-select');
+      const threshold = Number(thresholdInput.value);
+      const type = typeSelect.value || 'buy';
+
+      if (!Number.isFinite(threshold) || threshold <= 0) {
+        elements.statusText.textContent = 'Enter a valid target price.';
+        return;
+      }
+
+      try {
+        await upsertUsPriceAlert({
+          key: stock.key,
+          symbol: stock.symbol,
+          name: stock.name,
+          threshold,
+          type
+        });
+        openUsAlertEditors.delete(stockKey);
+        await loadUsPriceAlerts();
+        renderUsStocks(latestMarketStocks);
+        showPriceAlertSavedDialog({
+          key: stock.key,
+          name: stock.name,
+          threshold,
+          type
+        });
+      } catch (error) {
+        elements.statusText.textContent = `Error: ${error?.message || 'Failed to save US alert'}`;
+      }
+      return;
+    }
+
+    // Reset US Alert
+    const resetBtn = event.target.closest('.us-alert-reset-btn');
+    if (resetBtn) {
+      const alert = getUsStockPriceAlert(stockKey);
+      if (alert) {
+        try {
+          await resetUsPriceAlert(alert.id);
+          elements.statusText.textContent = `${stock.name} US alert reset.`;
+          openUsAlertEditors.delete(stockKey);
+          renderUsStocks(latestMarketStocks);
+        } catch (error) {
+          elements.statusText.textContent = `Error: ${error?.message || 'Failed to reset US alert'}`;
+        }
+      }
+      return;
+    }
+
+    // Clear US Alert
+    const clearBtn = event.target.closest('.us-alert-clear-btn');
+    if (clearBtn) {
+      const alert = getUsStockPriceAlert(stockKey);
+      if (alert) {
+        try {
+          await removeUsPriceAlert(alert.id);
+          elements.statusText.textContent = `${stock.name} US alert cleared.`;
+          openUsAlertEditors.delete(stockKey);
+          await loadUsPriceAlerts();
+          renderUsStocks(latestMarketStocks);
+        } catch (error) {
+          elements.statusText.textContent = `Error: ${error?.message || 'Failed to clear US alert'}`;
+        }
+      }
+      return;
+    }
+  });
+}
+
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('#stockSearchInput') && !event.target.closest('#stockSearchResults')) {
+    clearSearchResults(elements.stockSearchResults, 'stock');
+  }
+
+  if (!event.target.closest('#usStockSearchInput') && !event.target.closest('#usStockSearchResults')) {
+    clearSearchResults(elements.usStockSearchResults, 'us-stock');
   }
 });
 
@@ -1014,34 +1750,26 @@ elements.syncApiAlertsBtn.addEventListener('click', async () => {
   }
 });
 
-elements.stocksList.addEventListener('click', async (event) => {
-  const removeButton = event.target.closest('.stock-remove-btn');
-  if (!removeButton) {
-    return;
-  }
-
-  try {
-    await removeTrackedStock(removeButton.dataset.key);
-  } catch (error) {
-    elements.statusText.textContent = `Error: ${error?.message || 'Failed to remove stock'}`;
-  }
-});
-
-document.addEventListener('click', (event) => {
-  if (!event.target.closest('#stockSearchInput') && !event.target.closest('#stockSearchResults')) {
-    clearSearchResults(elements.stockSearchResults, 'stock');
-  }
-
-  if (!event.target.closest('#alertStockSearchInput') && !event.target.closest('#alertSearchResults')) {
-    clearSearchResults(elements.alertSearchResults, 'alert');
-  }
-});
+if (elements.syncUsApiAlertsBtn) {
+  elements.syncUsApiAlertsBtn.addEventListener('click', async () => {
+    try {
+      await syncUsApiPriceAlerts();
+    } catch (error) {
+      elements.statusText.textContent = `Error: ${error?.message || 'Failed to sync US API alerts'}`;
+    }
+  });
+}
 
 elements.stockSort.value = currentStockSort;
+if (elements.usStockSort) {
+  elements.usStockSort.value = currentUsStockSort;
+}
 switchTab('india');
 switchInnerTab('tracker');
 await loadTrackedStocks();
+await loadTrackedUsStocks();
 await loadPriceAlerts();
+await loadUsPriceAlerts();
 await ensureHolidaysCacheLoaded();
 await loadData();
 updateMarketTimers();

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Market Tracker",
   "description": "Track Indian market indices from your browser toolbar.",
-  "version": "0.1.0",
+  "version": "1.1.1",
   "action": {
     "default_title": "Market Tracker",
     "default_popup": "popup.html"
