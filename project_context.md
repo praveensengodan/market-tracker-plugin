@@ -1,6 +1,6 @@
 # Market Tracker Notes
 
-**Current Version:** `1.1.1`
+**Current Version:** `1.2.0`
 
 ## Versioning Policy (SemVer: MAJOR.MINOR.PATCH)
 - **Patch (`1.0.x`):** Small tweaks, bug fixes, or minor formatting adjustments.
@@ -69,8 +69,9 @@ All India-trading alerts skip Saturdays/Sundays and NSE holidays via `holidaysMa
    - Skips weekends and NSE holidays.
    - Manual Sync API button can force a pull from the popup.
 
-5. Stock Movers (Positive / Negative)
-   - Only during market hours (9:15 AM to 3:25 PM).
+5. India Stock Movers (Positive / Negative)
+   - Only during Indian market hours (9:15 AM to 3:25 PM IST).
+   - Filtered strictly for Indian tracked stocks (`trackedStocks`).
    - Every 10 minutes: sends Top Positive (>1%) and/or Top Negative (>1%) lists if any exist.
 
 6. India Indices Summary ("Market Tracker - India")
@@ -81,26 +82,41 @@ All India-trading alerts skip Saturdays/Sundays and NSE holidays via `holidaysMa
 
 ## Alert Timings (US / New York Time)
 
-7. US Indices Summary ("Market Tracker - US Indices")
+7. US Market Open Countdown (minute-by-minute)
+   - 9:25 AM to 9:30 AM ET (inclusive): notification every minute.
+   - 9:30 AM ET: "US Market opens now (9:30 AM ET / <IST Time> IST)".
+   - Shows both ET and current converted IST time dynamically.
+
+8. US Market Close Countdown (minute-by-minute)
+   - 3:45 PM to 4:00 PM ET (inclusive): notification every minute.
+   - 4:00 PM ET: "US Market closes now (4:00 PM ET / <IST Time> IST)".
+   - Shows both ET and current converted IST time dynamically.
+
+9. US Indices Summary ("Market Tracker - US Indices")
    - Only sent on US trading days (skips Saturdays, Sundays, and US stock market holidays).
    - During US market hours (9:30 AM to 4:00 PM ET): every 15 minutes.
    - Outside US market hours: every 120 minutes.
 
-8. US Stocks Price Alerts (per configured US stock target)
-   - Checked every 1 minute during US market hours (9:30 AM to 4:00 PM Eastern Time / `America/New_York`).
-   - Runs on dedicated `usPriceAlertScheduler` alarm to guarantee 1-minute checking without being affected by off-hours throttling.
-   - Suppressed on US weekends (Saturday/Sunday) and US stock market holidays (e.g., New Year's Day, MLK Day, Presidents' Day, Good Friday, Memorial Day, Juneteenth, Independence Day, Labor Day, Thanksgiving, Christmas).
-   - Supports both BUY (downward) and SELL (upward) target price directions in USD (`$`).
-   - Near-target (within 2% above buy target or 2% below sell target): one notification when entering the zone.
-   - Target reached (at/below buy target or at/above sell target): repeats every 2 minutes while target condition is met.
-   - Adding or updating a US stock alert automatically adds the stock to `trackedUsStocks`.
-   - Alert state resets when price exits the near zone, when threshold is updated, or when Reset is clicked in the popup.
+10. US Stocks Price Alerts (per configured US stock target)
+    - Checked every 1 minute during US market hours (9:30 AM to 4:00 PM Eastern Time / `America/New_York`).
+    - Runs on dedicated `usPriceAlertScheduler` alarm to guarantee 1-minute checking without being affected by off-hours throttling.
+    - Suppressed on US weekends (Saturday/Sunday) and US stock market holidays (e.g., New Year's Day, MLK Day, Presidents' Day, Good Friday, Memorial Day, Juneteenth, Independence Day, Labor Day, Thanksgiving, Christmas).
+    - Supports both BUY (downward) and SELL (upward) target price directions in USD (`$`).
+    - Near-target (within 2% above buy target or 2% below sell target): one notification when entering the zone.
+    - Target reached (at/below buy target or at/above sell target): repeats every 2 minutes while target condition is met.
+    - Adding or updating a US stock alert automatically adds the stock to `trackedUsStocks`.
+    - Alert state resets when price exits the near zone, when threshold is updated, or when Reset is clicked in the popup.
 
-9. US API Price Alert Sync
-   - 9:00 AM ET: pulls US API alert list before market open.
-   - 10:00 AM, 11:00 AM, 12:00 PM, 1:00 PM, 2:00 PM, 3:00 PM ET: pulls US API alert list during US market hours.
-   - Skips US weekends and US stock market holidays.
-   - Manual Sync API button in US Stock Tracker header can force a pull from the popup.
+11. US API Price Alert Sync
+    - 9:00 AM ET: pulls US API alert list before market open.
+    - 10:00 AM, 11:00 AM, 12:00 PM, 1:00 PM, 2:00 PM, 3:00 PM ET: pulls US API alert list during US market hours.
+    - Skips US weekends and US stock market holidays.
+    - Manual Sync API button in US Stock Tracker header can force a pull from the popup.
+
+12. US Stock Movers (Positive / Negative)
+    - Only during US market hours (9:30 AM to 4:00 PM ET).
+    - Filtered strictly for US tracked stocks (`trackedUsStocks`).
+    - Every 10 minutes: sends Top Positive (>1%) and/or Top Negative (>1%) lists if any exist.
 
 ## Merged Stocks & Alerts Architecture
 
@@ -114,8 +130,8 @@ All India-trading alerts skip Saturdays/Sundays and NSE holidays via `holidaysMa
 
 ## Files Changed
 
-- `background.worker.js`: recursive target alert logic, near-target notifications, separate high-priority price alert sender, reset handler, state reset on alert update, index notification suppression on holidays/weekends, buy/sell target support, Gift Nifty early morning session previous-day validation, US stock storage helpers, US stock search (`searchUsStocks`), US stock quote fetching, auto-adding alert stocks to `trackedStocks`/`trackedUsStocks` during manual upsert and API sync, US price alert scheduler (`usPriceAlertScheduler`), US price alert evaluation & notifications with explicit Eastern Time (`ET`) timestamps for US alerts and `IST` for India alerts (`runUsPriceAlertChecks`, `runUsPriceAlertScheduler`), US price alert API sync scheduler & fetcher (`syncUsPriceAlertsFromApi`, `runUsPriceAlertApiSyncScheduler`), and runtime message listeners for US alert CRUD and API sync operations.
-- `popup.js`: near/target status labels, market-alert pause copy, reset button behavior, buy/sell target inputs/dropdown extraction, status type chip rendering, US stock tracking state, search, sort, render, TradingView URL resolution for US vs Indian tickers, unified stock + inline alert badge/editor interactions for both India and US stocks, USD formatting for US alert editors/badges, US Sync API button trigger (`syncUsApiPriceAlerts`), US market timers (`updateUsMarketTimers`), and tab-aware status timestamps displaying ET when viewing US stocks or Global indices and IST when viewing Indian stocks/indices.
-- `popup.html`: 2-column inner tabs layout (India Stocks, US Stocks), removed standalone alerts panel, embedded Sync API button into both India and US Stocks headers, and added US Market Timers card to Global tab.
-- `popup.css`: 2-column inner tab styling, stock row layout with expandable alert badges/editor, and clean status chip styling.
+- `background.worker.js`: recursive target alert logic, near-target notifications, separate high-priority price alert sender, reset handler, state reset on alert update, index notification suppression on holidays/weekends, buy/sell target support, Gift Nifty early morning session previous-day validation, US stock storage helpers, US stock search (`searchUsStocks`), US stock quote fetching, auto-adding alert stocks to `trackedStocks`/`trackedUsStocks` during manual upsert and API sync, US price alert scheduler (`usPriceAlertScheduler`), US price alert evaluation & notifications with explicit Eastern Time (`ET`) timestamps for US alerts and `IST` for India alerts (`runUsPriceAlertChecks`, `runUsPriceAlertScheduler`), US price alert API sync scheduler & fetcher (`syncUsPriceAlertsFromApi`, `runUsPriceAlertApiSyncScheduler`), US market open and close countdown notifications (`buildUsAlertForMinute`, `checkUsMarketAlerts`, `LAST_US_ALERT_KEY`), US stock key filtering (`isKnownUsStockKey`) in `sanitizeTrackedStock` and `sanitizePriceAlert` to prevent US stocks like CoreWeave from leaking into Indian stock storage, `reset-storage` message handler to snapshot your currently tracked stocks, wipe storage, and cleanly restore Indian and US stock lists into their respective isolated stores, and runtime message listeners for US alert CRUD and API sync operations.
+- `popup.js`: near/target status labels, market-alert pause copy, reset button behavior, buy/sell target inputs/dropdown extraction, status type chip rendering, US stock tracking state, search, sort, render, TradingView URL resolution for US vs Indian tickers, unified stock + inline alert badge/editor interactions for both India and US stocks, USD formatting for US alert editors/badges, US Sync API button trigger (`syncUsApiPriceAlerts`), US market timers (`updateUsMarketTimers`), US stock key exclusion filter (`isKnownUsStockKey`) in `dedupePriceAlerts` and `loadTrackedStocks`, Reset Storage button trigger (`resetStorageBtn`) to wipe corrupted legacy storage and reload preserved clean stocks into their respective trackers, and tab-aware status timestamps displaying ET when viewing US stocks or Global indices and IST when viewing Indian stocks/indices.
+- `popup.html`: 2-column inner tabs layout (India Stocks, US Stocks), removed standalone alerts panel, embedded Sync API button into both India and US Stocks headers, added US Market Timers card to Global tab, and added "Reset Storage" button in footer.
+- `popup.css`: fixed popup container dimensions (`380px` width x `560px` height) with flexbox column layout and independent scrollable panels/lists (`#stocksList`, `#usStocksList`, `.tab-panel`), preventing any popup jumping or resizing when clicking buttons, toggling alert editors, or switching tabs; footer styling with Reset Storage button, 2-column inner tab styling, stock row layout with expandable alert badges/editor, and clean status chip styling.
 - `manifest.json`: allows the Google Script API host used for alert sync.

@@ -5,9 +5,16 @@
 
 body {
   margin: 0;
-  min-width: 340px;
+  width: 380px;
+  min-width: 380px;
+  max-width: 380px;
+  height: 560px;
+  min-height: 560px;
+  max-height: 560px;
+  box-sizing: border-box;
   background: radial-gradient(circle at top right, #e0ecff, #f8fafc 48%);
   color: #101828;
+  overflow: hidden;
 }
 
 body code {
@@ -16,6 +23,11 @@ body code {
 
 .app {
   padding: 10px;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .header {
@@ -73,10 +85,14 @@ body code {
 
 .tab-panel {
   display: none;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .tab-panel.active {
-  display: block;
+  display: flex;
+  flex-direction: column;
 }
 
 .timer-card {
@@ -86,6 +102,7 @@ body code {
   box-shadow: 0 3px 10px rgba(16, 24, 40, 0.08);
   margin-bottom: 8px;
   border: 1px solid #e4e7ec;
+  flex-shrink: 0;
 }
 
 .timer-title {
@@ -111,6 +128,7 @@ body code {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .card {
@@ -194,6 +212,7 @@ body code {
   grid-template-columns: repeat(2, 1fr);
   gap: 6px;
   margin-bottom: 8px;
+  flex-shrink: 0;
 }
 
 .inner-tab-btn {
@@ -215,15 +234,42 @@ body code {
 
 .inner-tab-panel {
   display: none;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
 }
 
 .inner-tab-panel.active {
-  display: block;
+  display: flex;
 }
 .footer {
   margin-top: 8px;
   font-size: 11px;
   color: #475467;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.reset-storage-btn {
+  border: 1px solid #d0d5dd;
+  background: rgba(255, 255, 255, 0.8);
+  color: #475467;
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.reset-storage-btn:hover {
+  background: #fee4e2;
+  border-color: #fecdca;
+  color: #b42318;
 }
 
 .stock-board {
@@ -232,6 +278,11 @@ body code {
   padding: 10px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.35);
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  box-sizing: border-box;
 }
 
 .stock-board-title {
@@ -586,6 +637,16 @@ body code {
 
 .stock-remove-btn:hover {
   background: rgba(153, 27, 27, 0.4);
+}
+
+#stocksList,
+#usStocksList {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+  display: flex;
+  flex-direction: column;
 }
 
 .stock-empty {

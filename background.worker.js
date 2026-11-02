@@ -82,7 +82,9 @@ const POST_CLOSE_TIME_MINUTES = 15 * 60 + 25;
 const NIFTY_NOTIFY_CLOSE_MINUTES = 15 * 60 + 25;
 
 const US_OPEN_MINUTES = 9 * 60 + 30;
-const US_CLOSE_MINUTES = 16 * 60;
+const US_OPEN_COUNTDOWN_START_MINUTES = 9 * 60 + 25; // 9:25 AM ET (5 mins before open)
+const US_CLOSE_MINUTES = 16 * 60; // 4:00 PM ET
+const US_CLOSE_COUNTDOWN_START_MINUTES = 15 * 60 + 45; // 3:45 PM ET (15 mins countdown)
 
 const INDIA_MARKET_INTERVAL_MINUTES = 10;
 const INDIA_OFF_INTERVAL_MINUTES = 120;
@@ -95,6 +97,7 @@ const OFF_HOURS_REFRESH_MS = 2 * 60 * 60 * 1000;
 const STORAGE_KEY = 'marketData';
 const LAST_UPDATED_KEY = 'lastUpdatedAt';
 const LAST_ALERT_KEY = 'lastAlertKey';
+const LAST_US_ALERT_KEY = 'lastUsAlertKey';
 const LAST_INDEX_NOTIFY_KEY = 'lastIndexNotifyBuckets';
 const NOTIFICATIONS_PAUSED_KEY = 'notificationsPaused';
 const TRACKED_STOCKS_KEY = 'trackedStocks';
@@ -169,15 +172,26 @@ function normalizeStockKey(symbol) {
     .replace(/[^a-z0-9]+/g, '');
 }
 
+function isKnownUsStockKey(key) {
+  const normKey = normalizeStockKey(key);
+  return ['coreweave', 'crwv', 'aapl', 'msft', 'nvda', 'googl', 'goog', 'amzn', 'tsla', 'meta', 'nflx', 'amd', 'pltr', 'intc', 'avgo', 'qcom', 'orcl', 'crm', 'adbe', 'pypl', 'coin', 'uber', 'arm', 'smci', 'baba'].includes(normKey);
+}
+
 function sanitizeTrackedStock(stock) {
-  const symbol = normalizeStockSymbol(stock?.symbol || stock?.displaySymbol || stock?.name);
+  const rawSymbol = String(stock?.symbol || stock?.displaySymbol || stock?.name || '').trim();
+  const rawKey = normalizeStockKey(stock?.key || rawSymbol);
+  if (!rawSymbol || isKnownUsStockKey(rawKey) || isKnownUsStockKey(rawSymbol)) {
+    return null;
+  }
+
+  const symbol = normalizeStockSymbol(rawSymbol);
   if (!symbol) {
     return null;
   }
 
   const baseSymbol = symbol.replace(/\.NS$/i, '');
   const key = normalizeStockKey(stock?.key || baseSymbol);
-  if (!key) {
+  if (!key || isKnownUsStockKey(key)) {
     return null;
   }
 
@@ -1920,8 +1934,11 @@ function formatStockMoverLine(stock) {
   return `${stock.label} ${sign}${Math.abs(pct).toFixed(2)}%`;
 }
 
-function buildStockMoverMessages(stocks) {
+function buildStockMoverMessages(stocks, allowedKeys = null) {
+  const allowedSet = Array.isArray(allowedKeys) ? new Set(allowedKeys.map((k) => String(k).toLowerCase())) : null;
+
   const movers = Object.entries(stocks || {})
+    .filter(([key]) => (allowedSet ? allowedSet.has(String(key).toLowerCase()) : true))
     .map(([key, data]) => ({ key, data, label: data?.name || key.toUpperCase() }))
     .filter((item) => Number.isFinite(Number(item.data?.changePercent)));
 
@@ -2013,28 +2030,99 @@ function buildAlertForMinute(nowParts) {
   return null;
 }
 
-async function checkMarketAlerts() {
-  await ensureHolidaysCacheLoaded();
-  const nowParts = getIstDateParts();
-  const holidayName = getNseHolidayName(nowParts.dateKey);
-  if (isWeekend(nowParts.weekday) || holidayName) {
+function buildUsAlertForMinute(usParts) {
+  const minutesNow = usParts.minutesSinceMidnight;
+
+  const istTimeStr = new Date().toLocaleTimeString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
+
+  if (minutesNow >= US_OPEN_COUNTDOWN_START_MINUTES && minutesNow <= US_OPEN_MINUTES) {
+    if (minutesNow === US_OPEN_MINUTES) {
+      return {
+        key: `us-open-${usParts.dateKey}-${minutesNow}`,
+        id: `us-open-alert-${usParts.dateKey}-${minutesNow}`,
+        title: 'Market Tracker - US Market',
+        message: `US Market opens now (9:30 AM ET / ${istTimeStr} IST).`
+      };
+    }
+    const remaining = US_OPEN_MINUTES - minutesNow;
+    const suffix = remaining === 1 ? '' : 's';
+    return {
+      key: `us-open-${usParts.dateKey}-${minutesNow}`,
+      id: `us-open-alert-${usParts.dateKey}-${minutesNow}`,
+      title: 'Market Tracker - US Market',
+      message: `US Market opens in ${remaining} minute${suffix} (9:30 AM ET / ${istTimeStr} IST).`
+    };
+  }
+
+  if (minutesNow >= US_CLOSE_COUNTDOWN_START_MINUTES && minutesNow <= US_CLOSE_MINUTES) {
+    if (minutesNow === US_CLOSE_MINUTES) {
+      return {
+        key: `us-close-${usParts.dateKey}-${minutesNow}`,
+        id: `us-close-alert-${usParts.dateKey}-${minutesNow}`,
+        title: 'Market Tracker - US Market',
+        message: `US Market closes now (4:00 PM ET / ${istTimeStr} IST).`
+      };
+    }
+    const remaining = US_CLOSE_MINUTES - minutesNow;
+    const suffix = remaining === 1 ? '' : 's';
+    return {
+      key: `us-close-${usParts.dateKey}-${minutesNow}`,
+      id: `us-close-alert-${usParts.dateKey}-${minutesNow}`,
+      title: 'Market Tracker - US Market',
+      message: `US Market closes in ${remaining} minute${suffix} (4:00 PM ET / ${istTimeStr} IST).`
+    };
+  }
+
+  return null;
+}
+
+async function checkUsMarketAlerts() {
+  const usParts = getZonedDateParts(US_TIMEZONE);
+  const isHoliday = isUsHoliday(usParts.dateKey);
+  const isUsWknd = isWeekend(usParts.weekday);
+  if (isUsWknd || isHoliday) {
     return;
   }
 
-  const alertPayload = buildAlertForMinute(nowParts);
+  const alertPayload = buildUsAlertForMinute(usParts);
   if (!alertPayload) {
     return;
   }
 
-  const storage = await chrome.storage.local.get([LAST_ALERT_KEY]);
-  if (storage[LAST_ALERT_KEY] === alertPayload.key) {
+  const storage = await chrome.storage.local.get([LAST_US_ALERT_KEY]);
+  if (storage[LAST_US_ALERT_KEY] === alertPayload.key) {
     return;
   }
 
   await sendAlert(alertPayload);
   await chrome.storage.local.set({
-    [LAST_ALERT_KEY]: alertPayload.key
+    [LAST_US_ALERT_KEY]: alertPayload.key
   });
+}
+
+async function checkMarketAlerts() {
+  await ensureHolidaysCacheLoaded();
+  const nowParts = getIstDateParts();
+  const holidayName = getNseHolidayName(nowParts.dateKey);
+  if (!isWeekend(nowParts.weekday) && !holidayName) {
+    const alertPayload = buildAlertForMinute(nowParts);
+    if (alertPayload) {
+      const storage = await chrome.storage.local.get([LAST_ALERT_KEY]);
+      if (storage[LAST_ALERT_KEY] !== alertPayload.key) {
+        await sendAlert(alertPayload);
+        await chrome.storage.local.set({
+          [LAST_ALERT_KEY]: alertPayload.key
+        });
+      }
+    }
+  }
+
+  await checkUsMarketAlerts();
 }
 
 async function runIndexNotificationScheduler() {
@@ -2132,7 +2220,9 @@ async function runIndexNotificationScheduler() {
   }
 
   if (niftyMarketHours) {
-    const moverMessages = buildStockMoverMessages(marketData?.stocks || {});
+    const trackedStocks = await getTrackedStocks();
+    const indiaKeys = trackedStocks.map((s) => s.key);
+    const moverMessages = buildStockMoverMessages(marketData?.stocks || {}, indiaKeys);
 
     if (moverMessages.negatives) {
       await maybeSendByInterval(
@@ -2155,6 +2245,33 @@ async function runIndexNotificationScheduler() {
     }
   }
 
+  const isUsTradingHours = !isUsHolidayOrWeekend && isUsMarketHours(us.minutesSinceMidnight);
+  if (isUsTradingHours) {
+    const trackedUsStocks = await getTrackedUsStocks();
+    const usKeys = trackedUsStocks.map((s) => s.key);
+    const usMoverMessages = buildStockMoverMessages(marketData?.stocks || {}, usKeys);
+
+    if (usMoverMessages.negatives) {
+      await maybeSendByInterval(
+        'us-stock-movers-neg',
+        STOCK_MOVER_INTERVAL_MINUTES,
+        'Market Tracker - US Top Negative (>1%)',
+        usMoverMessages.negatives,
+        8
+      );
+    }
+
+    if (usMoverMessages.positives) {
+      await maybeSendByInterval(
+        'us-stock-movers-pos',
+        STOCK_MOVER_INTERVAL_MINUTES,
+        'Market Tracker - US Top Positive (>1%)',
+        usMoverMessages.positives,
+        9
+      );
+    }
+  }
+
   if (bucketsUpdated) {
     await chrome.storage.local.set({
       [LAST_INDEX_NOTIFY_KEY]: buckets
@@ -2162,34 +2279,25 @@ async function runIndexNotificationScheduler() {
   }
 }
 
+function createAlarmIfMissing(name, periodInMinutes, delayInMinutes = 0.1) {
+  chrome.alarms.get(name, (existing) => {
+    if (!existing) {
+      chrome.alarms.create(name, {
+        delayInMinutes,
+        periodInMinutes
+      });
+    }
+  });
+}
+
 function ensureAlarms() {
-  chrome.alarms.create('refreshMarketData', {
-    periodInMinutes: REFRESH_MINUTES
-  });
-
-  chrome.alarms.create('checkMarketAlerts', {
-    periodInMinutes: ALERT_CHECK_MINUTES
-  });
-
-  chrome.alarms.create('indexNotifyScheduler', {
-    periodInMinutes: INDEX_NOTIFY_SCHEDULER_MINUTES
-  });
-
-  chrome.alarms.create('priceAlertScheduler', {
-    periodInMinutes: 1
-  });
-
-  chrome.alarms.create('usPriceAlertScheduler', {
-    periodInMinutes: 1
-  });
-
-  chrome.alarms.create('priceAlertApiSyncScheduler', {
-    periodInMinutes: 1
-  });
-
-  chrome.alarms.create('usPriceAlertApiSyncScheduler', {
-    periodInMinutes: 1
-  });
+  createAlarmIfMissing('refreshMarketData', REFRESH_MINUTES, 0.1);
+  createAlarmIfMissing('checkMarketAlerts', ALERT_CHECK_MINUTES, 0.1);
+  createAlarmIfMissing('indexNotifyScheduler', INDEX_NOTIFY_SCHEDULER_MINUTES, 0.1);
+  createAlarmIfMissing('priceAlertScheduler', 1, 0.1);
+  createAlarmIfMissing('usPriceAlertScheduler', 1, 0.1);
+  createAlarmIfMissing('priceAlertApiSyncScheduler', 1, 0.1);
+  createAlarmIfMissing('usPriceAlertApiSyncScheduler', 1, 0.1);
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -2208,6 +2316,10 @@ chrome.runtime.onStartup.addListener(() => {
   ensureAlarms();
   initializeHolidaysCache();
 });
+
+// Always ensure alarms and holiday cache are initialized when the Service Worker wakes up
+ensureAlarms();
+initializeHolidaysCache();
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'refreshMarketData') {
@@ -2362,6 +2474,54 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     syncUsPriceAlertsFromApi({ force: true })
       .then((result) => sendResponse({ ok: true, count: result.count || 0 }))
       .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to sync US price alerts' }));
+
+    return true;
+  }
+
+  if (message?.type === 'reset-storage') {
+    (async () => {
+      // 1. Snapshot current tracked stocks and alerts
+      const currentTrackedIndia = await getTrackedStocks();
+      const currentTrackedUs = await getTrackedUsStocks();
+      const currentIndiaAlerts = await getPriceAlerts();
+      const currentUsAlerts = await getUsPriceAlerts();
+
+      // 2. Filter Indian lists strictly to Indian symbols
+      const cleanIndiaStocks = currentTrackedIndia.filter(
+        (s) => !isKnownUsStockKey(s.key) && !isKnownUsStockKey(s.symbol) && !isKnownUsStockKey(s.name)
+      );
+      const cleanIndiaAlerts = currentIndiaAlerts.filter(
+        (a) => !isKnownUsStockKey(a.key) && !isKnownUsStockKey(a.symbol) && !isKnownUsStockKey(a.name)
+      );
+
+      // 3. Filter US lists strictly to US symbols
+      const cleanUsStocks = currentTrackedUs.filter(
+        (s) => !String(s.symbol || '').endsWith('.NS')
+      );
+      const cleanUsAlerts = currentUsAlerts.filter(
+        (a) => !String(a.symbol || '').endsWith('.NS')
+      );
+
+      // 4. Clear all Chrome storage (wiping stale states, buckets, timestamps, alarms artifacts)
+      await chrome.storage.local.clear();
+      await initializeHolidaysCache();
+
+      // 5. Restore clean Indian and US lists back into isolated storage
+      await chrome.storage.local.set({
+        [TRACKED_STOCKS_KEY]: cleanIndiaStocks.length > 0 ? cleanIndiaStocks : cloneDefaultTrackedStocks(),
+        [TRACKED_US_STOCKS_KEY]: cleanUsStocks.length > 0 ? cleanUsStocks : cloneDefaultTrackedUsStocks(),
+        [PRICE_ALERTS_KEY]: cleanIndiaAlerts,
+        [PRICE_ALERT_STATES_KEY]: {},
+        [US_PRICE_ALERTS_KEY]: cleanUsAlerts,
+        [US_PRICE_ALERT_STATES_KEY]: {}
+      });
+
+      // 6. Refresh market data with the clean universe
+      await refreshMarketData({ force: true });
+      return { ok: true, indiaCount: cleanIndiaStocks.length, usCount: cleanUsStocks.length };
+    })()
+      .then((res) => sendResponse(res))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || 'Failed to reset storage' }));
 
     return true;
   }

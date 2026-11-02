@@ -115,6 +115,7 @@ const elements = {
   usStockSearchResults: document.getElementById('usStockSearchResults'),
   syncApiAlertsBtn: document.getElementById('syncApiAlertsBtn'),
   syncUsApiAlertsBtn: document.getElementById('syncUsApiAlertsBtn'),
+  resetStorageBtn: document.getElementById('resetStorageBtn'),
   niftyPrice: document.getElementById('niftyPrice'),
   niftyDelta: document.getElementById('niftyDelta'),
   bankNiftyPrice: document.getElementById('bankNiftyPrice'),
@@ -171,6 +172,11 @@ let latestMarketStocks = {};
 let openAlertEditors = new Set();
 let openUsAlertEditors = new Set();
 
+function isKnownUsStockKey(key) {
+  const normKey = String(key || '').trim().toLowerCase().replace(/\.ns$/i, '').replace(/[^a-z0-9]+/g, '');
+  return ['coreweave', 'crwv', 'aapl', 'msft', 'nvda', 'googl', 'goog', 'amzn', 'tsla', 'meta', 'nflx', 'amd', 'pltr', 'intc', 'avgo', 'qcom', 'orcl', 'crm', 'adbe', 'pypl', 'coin', 'uber', 'arm', 'smci', 'baba'].includes(normKey);
+}
+
 function cloneList(items) {
   return items.map((item) => ({ ...item }));
 }
@@ -180,6 +186,22 @@ function getAlertSourceRank(source) {
 }
 
 function dedupePriceAlerts(alerts) {
+  const byKey = new Map();
+  for (const alert of alerts || []) {
+    if (!alert?.key || isKnownUsStockKey(alert.key) || isKnownUsStockKey(alert.symbol) || isKnownUsStockKey(alert.name)) {
+      continue;
+    }
+
+    const existing = byKey.get(alert.key);
+    if (!existing || getAlertSourceRank(alert.source) >= getAlertSourceRank(existing.source)) {
+      byKey.set(alert.key, alert);
+    }
+  }
+
+  return Array.from(byKey.values());
+}
+
+function dedupeUsPriceAlerts(alerts) {
   const byKey = new Map();
   for (const alert of alerts || []) {
     if (!alert?.key) {
@@ -641,27 +663,14 @@ function renderStatus(lastUpdatedAt, lastError) {
   }
 
   const time = new Date(lastUpdatedTimestamp);
-  const isUsContext = currentActiveTab === 'global' || (currentActiveTab === 'stocks' && currentInnerActiveTab === 'us-tracker');
-
-  if (isUsContext) {
-    const formatted = time.toLocaleTimeString('en-US', {
-      timeZone: US_TIMEZONE,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: true
-    });
-    elements.statusText.textContent = `Updated at ${formatted} ET`;
-  } else {
-    const formatted = time.toLocaleTimeString('en-IN', {
-      timeZone: 'Asia/Kolkata',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: true
-    });
-    elements.statusText.textContent = `Updated at ${formatted} IST`;
-  }
+  const formatted = time.toLocaleTimeString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+  elements.statusText.textContent = `Updated at ${formatted} IST`;
 }
 
 function getIstDateParts(now = new Date()) {
@@ -1048,7 +1057,8 @@ function switchInnerTab(tab) {
 }
 async function loadTrackedStocks() {
   const data = await chrome.storage.local.get([TRACKED_STOCKS_KEY]);
-  trackedStocks = Array.isArray(data[TRACKED_STOCKS_KEY]) ? data[TRACKED_STOCKS_KEY] : cloneList(DEFAULT_TRACKED_STOCKS);
+  const rawList = Array.isArray(data[TRACKED_STOCKS_KEY]) ? data[TRACKED_STOCKS_KEY] : cloneList(DEFAULT_TRACKED_STOCKS);
+  trackedStocks = rawList.filter((stock) => !isKnownUsStockKey(stock.key) && !isKnownUsStockKey(stock.symbol) && !isKnownUsStockKey(stock.name));
 }
 
 async function loadTrackedUsStocks() {
@@ -1063,7 +1073,7 @@ async function loadPriceAlerts() {
 
 async function loadUsPriceAlerts() {
   const data = await chrome.storage.local.get([US_PRICE_ALERTS_KEY]);
-  usPriceAlerts = dedupePriceAlerts(Array.isArray(data[US_PRICE_ALERTS_KEY]) ? data[US_PRICE_ALERTS_KEY] : []);
+  usPriceAlerts = dedupeUsPriceAlerts(Array.isArray(data[US_PRICE_ALERTS_KEY]) ? data[US_PRICE_ALERTS_KEY] : []);
 }
 
 async function loadData() {
@@ -1756,6 +1766,29 @@ if (elements.syncUsApiAlertsBtn) {
       await syncUsApiPriceAlerts();
     } catch (error) {
       elements.statusText.textContent = `Error: ${error?.message || 'Failed to sync US API alerts'}`;
+    }
+  });
+}
+
+if (elements.resetStorageBtn) {
+  elements.resetStorageBtn.addEventListener('click', async () => {
+    if (!confirm('Clear local cache and clean up stocks list (preserving your India and US stocks in their separate lists)?')) {
+      return;
+    }
+    try {
+      elements.statusText.textContent = 'Clearing and restoring clean storage...';
+      const response = await chrome.runtime.sendMessage({ type: 'reset-storage' });
+      if (!response?.ok) {
+        throw new Error(response?.error || 'Failed to reset storage');
+      }
+      await loadTrackedStocks();
+      await loadTrackedUsStocks();
+      await loadPriceAlerts();
+      await loadUsPriceAlerts();
+      await loadData();
+      elements.statusText.textContent = `Cleaned storage: restored ${response.indiaCount || 0} India and ${response.usCount || 0} US stocks.`;
+    } catch (error) {
+      elements.statusText.textContent = `Error: ${error?.message || 'Failed to reset storage'}`;
     }
   });
 }

@@ -11,3 +11,7 @@
    - Increment **MINOR** (`1.X.0`) for new features or notable enhancements (e.g. adding new alert systems, API sync, UI tabs).
    - Increment **MAJOR** (`X.0.0`) for complete revamps or breaking architectural shifts.
 3. Keep `manifest.json` and `project_context.md` updated with the active version on every release/change.
+
+## Git Workflow Rules
+1. Do **NOT** run `git commit` or `git push` automatically after making changes.
+2. Only stage, commit, or push when the user explicitly asks to do so.
